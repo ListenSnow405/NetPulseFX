@@ -1,6 +1,7 @@
 package com.netpulse.netpulsefx;
 
 import com.netpulse.netpulsefx.exception.NetworkInterfaceException;
+import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.NetworkInterfaceService;
 import com.netpulse.netpulsefx.task.TrafficMonitorTask;
 import javafx.application.Platform;
@@ -8,6 +9,8 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
+import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -15,6 +18,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.XYChart;
+import javafx.stage.Stage;
 import org.pcap4j.core.PcapNetworkInterface;
 
 import java.text.SimpleDateFormat;
@@ -48,6 +52,10 @@ public class MainController {
     @FXML
     private ListView<String> networkInterfaceListView;
     
+    /** 查看历史数据按钮 */
+    @FXML
+    private Button viewHistoryButton;
+    
     /** 刷新网卡按钮 */
     @FXML
     private Button refreshButton;
@@ -76,8 +84,14 @@ public class MainController {
     /** 网卡服务对象：负责获取网卡信息 */
     private NetworkInterfaceService networkInterfaceService;
     
+    /** 数据库服务对象：负责流量数据的持久化存储 */
+    private DatabaseService databaseService;
+    
     /** 存储实际的网卡对象列表，用于后续的监控操作 */
     private List<PcapNetworkInterface> pcapNetworkInterfaces;
+    
+    /** 当前正在监控的网卡名称（用于数据库记录） */
+    private String currentMonitoringInterfaceName;
     
     // ========== 流量监控相关 ==========
     
@@ -118,6 +132,9 @@ public class MainController {
         
         // 初始化服务对象
         networkInterfaceService = new NetworkInterfaceService();
+        
+        // 初始化数据库服务（用于保存流量历史数据）
+        databaseService = DatabaseService.getInstance();
         
         // 初始化流量监控相关组件
         initializeTrafficMonitoring();
@@ -169,6 +186,37 @@ public class MainController {
     // ========== 事件处理方法 ==========
     
     /**
+     * 查看历史数据按钮的点击事件处理
+     * 打开历史数据查看窗口
+     */
+    @FXML
+    protected void onViewHistoryButtonClick() {
+        try {
+            // 加载历史数据窗口的 FXML 文件
+            FXMLLoader fxmlLoader = new FXMLLoader(
+                HelloApplication.class.getResource("history-view.fxml")
+            );
+            
+            // 创建新窗口
+            Stage historyStage = new Stage();
+            historyStage.setTitle("流量历史数据");
+            historyStage.setScene(new Scene(fxmlLoader.load(), 800, 500));
+            
+            // 设置窗口为模态窗口（可选，这里使用非模态，允许同时查看主窗口）
+            // historyStage.initModality(Modality.APPLICATION_MODAL);
+            
+            // 显示窗口
+            historyStage.show();
+            
+        } catch (Exception e) {
+            // 如果打开窗口失败，显示错误提示
+            showAlert(Alert.AlertType.ERROR, "打开历史数据窗口失败", 
+                    "无法打开历史数据查看窗口：\n" + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
      * 刷新网卡按钮的点击事件处理
      * 重新扫描系统中的所有网卡并更新列表显示
      */
@@ -210,6 +258,9 @@ public class MainController {
             PcapNetworkInterface selectedInterface = pcapNetworkInterfaces.get(selectedIndex);
             
             try {
+                // 保存当前监控的网卡名称（用于数据库记录）
+                currentMonitoringInterfaceName = selectedInterface.getName();
+                
                 // 清空图表数据
                 trafficSeries.getData().clear();
                 
@@ -311,6 +362,7 @@ public class MainController {
         refreshButton.setDisable(false);
         networkInterfaceListView.setDisable(false);
         titleLabel.setText("请选择监控网卡");
+        currentMonitoringInterfaceName = null; // 清除当前监控的网卡名称
     }
     
     /**
@@ -322,6 +374,12 @@ public class MainController {
      * 2. 调用 trafficMonitorTask.getAndResetBytes() 读取并清零原子变量
      * 3. 使用 Platform.runLater() 确保 UI 更新在 JavaFX Application Thread 执行
      * 4. 限制数据点数量，只保留最近60个点（1分钟的数据）
+     * 5. 异步保存流量数据到 H2 数据库（不阻塞 UI 线程）
+     * 
+     * 数据库集成说明：
+     * - 流量数据通过 DatabaseService 异步保存到数据库
+     * - 使用 CompletableFuture 确保数据库操作不会阻塞 UI 更新
+     * - 如果数据库保存失败，只记录错误，不影响图表显示
      */
     private void updateTrafficChart() {
         if (trafficMonitorTask == null || !trafficMonitorTask.isMonitoringActive()) {
@@ -337,6 +395,23 @@ public class MainController {
             
             // 生成当前时间标签
             String timeLabel = timeFormatter.format(new Date());
+            
+            // 异步保存流量数据到数据库
+            // 注意：这里假设 down_speed 和 up_speed 都使用相同的值
+            // 如果需要区分上行和下行，需要在 TrafficMonitorTask 中分别统计
+            // 由于当前的 TrafficMonitorTask 只统计总流量，这里将下行和上行都设置为相同值
+            // 未来可以根据需要扩展 TrafficMonitorTask 来区分方向
+            if (currentMonitoringInterfaceName != null && databaseService != null) {
+                databaseService.saveTrafficDataAsync(
+                        currentMonitoringInterfaceName,
+                        kbPerSecond,  // 下行速度（当前为总流量）
+                        kbPerSecond   // 上行速度（当前为总流量，未来可扩展为分别统计）
+                ).exceptionally(e -> {
+                    // 数据库保存失败时，只记录错误，不影响 UI 显示
+                    System.err.println("[MainController] 保存流量数据到数据库失败: " + e.getMessage());
+                    return null;
+                });
+            }
             
             // 使用 Platform.runLater() 确保 UI 更新在主线程执行
             Platform.runLater(() -> {

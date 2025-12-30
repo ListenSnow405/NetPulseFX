@@ -52,6 +52,10 @@
 
     <!-- 底部操作按钮区域：使用 HBox 水平排列按钮 -->
     <HBox spacing="10.0" alignment="CENTER_RIGHT">
+        <!-- 查看历史数据按钮：打开历史数据查看窗口 -->
+        <Button fx:id="viewHistoryButton" text="查看历史数据" onAction="#onViewHistoryButtonClick"
+                style="-fx-pref-width: 120px;"/>
+        
         <!-- 刷新网卡按钮：重新扫描并更新网卡列表 -->
         <Button fx:id="refreshButton" text="刷新网卡" onAction="#onRefreshButtonClick" 
                 style="-fx-pref-width: 120px;"/>

@@ -16,6 +16,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
+        </dependency>
+        <dependency>
             <groupId>org.pcap4j</groupId>
             <artifactId>pcap4j-core</artifactId>
             <version>1.8.2</version>
