@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.chart.CategoryAxis?>
+<?import javafx.scene.chart.LineChart?>
+<?import javafx.scene.chart.NumberAxis?>
+<?import javafx.scene.chart.XYChart?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.VBox?>
+
+<!--
+    主界面布局文件
+    使用 VBox 作为根容器，采用垂直布局
+    包含：标题标签、网卡列表视图、操作按钮区域
+-->
+<VBox spacing="15.0" xmlns="http://javafx.com/javafx"
+      xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.netpulse.netpulsefx.MainController">
+    <!-- 设置整体内边距 -->
+    <padding>
+        <Insets bottom="20.0" left="20.0" right="20.0" top="20.0"/>
+    </padding>
+
+    <!-- 标题标签：提示用户选择监控网卡 -->
+    <Label fx:id="titleLabel" text="请选择监控网卡" style="-fx-font-size: 18px; -fx-font-weight: bold;"/>
+
+    <!-- 网卡列表视图：显示所有可用的网络接口
+         使用自定义 CellFactory 以显示网卡的详细信息（名称、描述、IP地址等） -->
+    <ListView fx:id="networkInterfaceListView">
+        <!-- 设置列表视图的最小高度，确保有足够的显示空间 -->
+        <minHeight>200.0</minHeight>
+        <maxHeight>200.0</maxHeight>
+    </ListView>
+
+    <!-- 实时流量波形图：显示网络流量的实时变化
+         X轴：时间（CategoryAxis）
+         Y轴：流量 KB/s（NumberAxis）
+         禁用动画以提升实时渲染性能 -->
+    <Label text="实时流量监控" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+    <LineChart fx:id="trafficChart" animated="false" VBox.vgrow="ALWAYS" createSymbols="false">
+        <xAxis>
+            <CategoryAxis label="时间" />
+        </xAxis>
+        <yAxis>
+            <NumberAxis label="流量 (KB/s)" />
+        </yAxis>
+        <minHeight>300.0</minHeight>
+    </LineChart>
+
+    <!-- 底部操作按钮区域：使用 HBox 水平排列按钮 -->
+    <HBox spacing="10.0" alignment="CENTER_RIGHT">
+        <!-- 刷新网卡按钮：重新扫描并更新网卡列表 -->
+        <Button fx:id="refreshButton" text="刷新网卡" onAction="#onRefreshButtonClick" 
+                style="-fx-pref-width: 120px;"/>
+
+        <!-- 开始监控按钮：启动对选中网卡的流量监控 -->
+        <Button fx:id="startMonitorButton" text="开始监控" onAction="#onStartMonitorButtonClick"
+                style="-fx-pref-width: 120px;"/>
+        
+        <!-- 停止监控按钮：停止当前的流量监控 -->
+        <Button fx:id="stopMonitorButton" text="停止监控" onAction="#onStopMonitorButtonClick"
+                style="-fx-pref-width: 120px;" disable="true"/>
+    </HBox>
+</VBox>
+
