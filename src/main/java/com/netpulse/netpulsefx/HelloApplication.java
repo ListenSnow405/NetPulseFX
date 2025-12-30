@@ -7,12 +7,16 @@ import javafx.stage.Stage;
 
 import java.io.IOException;
 
+/**
+ * NetPulse FX 主应用程序入口
+ */
 public class HelloApplication extends Application {
     @Override
     public void start(Stage stage) throws IOException {
-        FXMLLoader fxmlLoader = new FXMLLoader(HelloApplication.class.getResource("hello-view.fxml"));
-        Scene scene = new Scene(fxmlLoader.load(), 320, 240);
-        stage.setTitle("Hello!");
+        // 加载主界面 FXML 文件
+        FXMLLoader fxmlLoader = new FXMLLoader(HelloApplication.class.getResource("main-view.fxml"));
+        Scene scene = new Scene(fxmlLoader.load(), 600, 500);
+        stage.setTitle("NetPulse FX - 网络流量监控系统");
         stage.setScene(scene);
         stage.show();
     }
