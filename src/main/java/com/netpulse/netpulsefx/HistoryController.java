@@ -5,6 +5,7 @@ import com.netpulse.netpulsefx.model.IPLocationInfo;
 import com.netpulse.netpulsefx.service.AIService;
 import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.IPLocationService;
+import com.netpulse.netpulsefx.util.MarkdownToHtmlConverter;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
@@ -180,13 +181,20 @@ public class HistoryController {
     @FXML
     private VBox aiDiagnosisContainer;
     
-    /** AI 诊断结果文本区域 */
+    /** AI 诊断结果 WebView（用于显示 Markdown 格式的报告） */
     @FXML
-    private TextArea aiDiagnosisTextArea;
+    private javafx.scene.web.WebView aiDiagnosisWebView;
     
     /** AI 诊断进度指示器 */
     @FXML
     private ProgressIndicator aiDiagnosisProgress;
+    
+    /** AI 诊断取消按钮 */
+    @FXML
+    private Button cancelAIDiagnosisButton;
+    
+    /** 当前正在执行的 AI 诊断任务（用于取消功能） */
+    private Task<String> currentDiagnosisTask;
     
     // ========== 数据模型 ==========
     
@@ -272,6 +280,12 @@ public class HistoryController {
         if (aiDiagnosisContainer != null) {
             aiDiagnosisContainer.setVisible(false);
             aiDiagnosisContainer.setManaged(false);
+        }
+        
+        // 初始化取消按钮（默认隐藏）
+        if (cancelAIDiagnosisButton != null) {
+            cancelAIDiagnosisButton.setVisible(false);
+            cancelAIDiagnosisButton.setManaged(false);
         }
         
         // 初始化 IP 归属地显示区域
@@ -427,7 +441,7 @@ public class HistoryController {
      * @param sessionId 会话 ID
      */
     private void performAIDiagnosis(int sessionId) {
-        // 禁用按钮，显示进度指示器
+        // 禁用按钮，显示进度指示器和取消按钮
         aiDiagnosisButton.setDisable(true);
         if (aiDiagnosisContainer != null) {
             aiDiagnosisContainer.setVisible(true);
@@ -436,8 +450,15 @@ public class HistoryController {
         if (aiDiagnosisProgress != null) {
             aiDiagnosisProgress.setVisible(true);
         }
-        if (aiDiagnosisTextArea != null) {
-            aiDiagnosisTextArea.setText("正在加载会话数据并生成 AI 诊断报告，请稍候...");
+        if (cancelAIDiagnosisButton != null) {
+            cancelAIDiagnosisButton.setVisible(true);
+            cancelAIDiagnosisButton.setManaged(true);
+            cancelAIDiagnosisButton.setDisable(false);
+        }
+        if (aiDiagnosisWebView != null) {
+            // 在 WebView 中显示加载提示
+            String loadingHtml = MarkdownToHtmlConverter.convertToHtml("## 正在加载...\n\n正在加载会话数据并生成 AI 诊断报告，请稍候...");
+            aiDiagnosisWebView.getEngine().loadContent(loadingHtml);
         }
         
         statusLabel.setText("正在执行 AI 诊断...");
@@ -472,19 +493,49 @@ public class HistoryController {
             }
         };
         
+        // 保存任务引用，以便可以取消
+        currentDiagnosisTask = diagnosisTask;
+        
+        // 监听任务取消事件
+        diagnosisTask.setOnCancelled(e -> {
+            Platform.runLater(() -> {
+                if (aiDiagnosisWebView != null) {
+                    String cancelledHtml = MarkdownToHtmlConverter.convertToHtml("## 诊断已取消\n\nAI 诊断已被用户取消。");
+                    aiDiagnosisWebView.getEngine().loadContent(cancelledHtml);
+                }
+                if (aiDiagnosisProgress != null) {
+                    aiDiagnosisProgress.setVisible(false);
+                }
+                if (cancelAIDiagnosisButton != null) {
+                    cancelAIDiagnosisButton.setVisible(false);
+                    cancelAIDiagnosisButton.setManaged(false);
+                }
+                aiDiagnosisButton.setDisable(false);
+                statusLabel.setText("AI 诊断已取消");
+                currentDiagnosisTask = null;
+            });
+        });
+        
         // 任务成功完成
         diagnosisTask.setOnSucceeded(e -> {
             try {
-                String report = diagnosisTask.getValue();
+                String markdownReport = diagnosisTask.getValue();
                 Platform.runLater(() -> {
-                    if (aiDiagnosisTextArea != null) {
-                        aiDiagnosisTextArea.setText(report);
+                    if (aiDiagnosisWebView != null) {
+                        // 将 Markdown 转换为 HTML 并在 WebView 中显示
+                        String htmlContent = MarkdownToHtmlConverter.convertToHtml(markdownReport);
+                        aiDiagnosisWebView.getEngine().loadContent(htmlContent);
                     }
                     if (aiDiagnosisProgress != null) {
                         aiDiagnosisProgress.setVisible(false);
                     }
+                    if (cancelAIDiagnosisButton != null) {
+                        cancelAIDiagnosisButton.setVisible(false);
+                        cancelAIDiagnosisButton.setManaged(false);
+                    }
                     aiDiagnosisButton.setDisable(false);
                     statusLabel.setText("AI 诊断完成");
+                    currentDiagnosisTask = null;
                 });
             } catch (Exception ex) {
                 Platform.runLater(() -> {
@@ -495,6 +546,11 @@ public class HistoryController {
         
         // 任务失败
         diagnosisTask.setOnFailed(e -> {
+            // 检查任务是否被取消
+            if (diagnosisTask.isCancelled()) {
+                return; // 如果已取消，不处理失败事件
+            }
+            
             Throwable exception = diagnosisTask.getException();
             Platform.runLater(() -> {
                 String errorMsg = exception != null ? exception.getMessage() : "未知错误";
@@ -512,20 +568,65 @@ public class HistoryController {
      * 处理 AI 诊断错误
      */
     private void handleAIDiagnosisError(String message, Throwable exception) {
-        if (aiDiagnosisTextArea != null) {
-            aiDiagnosisTextArea.setText("**错误**\n\n" + message);
+        if (aiDiagnosisWebView != null) {
+            // 在 WebView 中显示错误信息（使用 Markdown 格式）
+            String errorMarkdown = "## 错误\n\n**" + message + "**";
+            String errorHtml = MarkdownToHtmlConverter.convertToHtml(errorMarkdown);
+            aiDiagnosisWebView.getEngine().loadContent(errorHtml);
         }
         if (aiDiagnosisProgress != null) {
             aiDiagnosisProgress.setVisible(false);
         }
+        if (cancelAIDiagnosisButton != null) {
+            cancelAIDiagnosisButton.setVisible(false);
+            cancelAIDiagnosisButton.setManaged(false);
+        }
         aiDiagnosisButton.setDisable(false);
         statusLabel.setText("AI 诊断失败");
+        currentDiagnosisTask = null;
         
         // 显示错误对话框
         showAlert(Alert.AlertType.ERROR, "AI 诊断失败", message);
         
         if (exception != null) {
             exception.printStackTrace();
+        }
+    }
+    
+    /**
+     * 取消 AI 诊断按钮点击事件
+     * 
+     * <p>功能说明：</p>
+     * <ul>
+     *   <li>取消当前正在执行的 AI 诊断任务</li>
+     *   <li>停止后台线程的执行</li>
+     *   <li>更新 UI 状态，恢复按钮可用性</li>
+     *   <li>显示取消提示信息</li>
+     * </ul>
+     */
+    @FXML
+    protected void onCancelAIDiagnosisClick() {
+        if (currentDiagnosisTask != null && !currentDiagnosisTask.isDone()) {
+            // 取消任务
+            boolean cancelled = currentDiagnosisTask.cancel(true);
+            
+            if (cancelled) {
+                System.out.println("[HistoryController] AI 诊断任务已取消");
+                statusLabel.setText("正在取消 AI 诊断...");
+                
+                // 禁用取消按钮，防止重复点击
+                if (cancelAIDiagnosisButton != null) {
+                    cancelAIDiagnosisButton.setDisable(true);
+                }
+            } else {
+                // 如果无法取消（可能已经完成或失败），显示提示
+                showAlert(Alert.AlertType.INFORMATION, "无法取消", 
+                    "AI 诊断任务已经完成或失败，无法取消。");
+            }
+        } else {
+            // 没有正在执行的任务
+            showAlert(Alert.AlertType.INFORMATION, "无任务可取消", 
+                "当前没有正在执行的 AI 诊断任务。");
         }
     }
     

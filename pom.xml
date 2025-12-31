@@ -47,6 +47,11 @@
             <version>21</version>
         </dependency>
         <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-web</artifactId>
+            <version>21</version>
+        </dependency>
+        <dependency>
             <groupId>org.controlsfx</groupId>
             <artifactId>controlsfx</artifactId>
             <version>11.2.1</version>
@@ -74,6 +79,12 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Markdown 转 HTML 支持 -->
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-all</artifactId>
+            <version>0.64.8</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -85,6 +96,11 @@
                 <configuration>
                     <source>21</source>
                     <target>21</target>
+                    <compilerArgs>
+                        <!-- 如果 flexmark 在未命名模块中，添加读取权限 -->
+                        <arg>--add-reads</arg>
+                        <arg>com.netpulse.netpulsefx=ALL-UNNAMED</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
@@ -103,6 +119,11 @@
                             <noManPages>true</noManPages>
                             <stripDebug>true</stripDebug>
                             <noHeaderFiles>true</noHeaderFiles>
+                            <!-- 添加运行时参数，允许访问未命名模块中的 flexmark -->
+                            <options>
+                                <option>--add-reads</option>
+                                <option>com.netpulse.netpulsefx=ALL-UNNAMED</option>
+                            </options>
                         </configuration>
                     </execution>
                 </executions>

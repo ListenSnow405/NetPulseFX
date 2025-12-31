@@ -11,6 +11,7 @@
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
 <?import javafx.scene.control.ProgressIndicator?>
+<?import javafx.scene.web.WebView?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
@@ -81,14 +82,23 @@
                         <VBox.margin>
                             <Insets top="10.0"/>
                         </VBox.margin>
-                        <Label text="AI 诊断结果" style="-fx-font-size: 14px; -fx-font-weight: bold;"/>
-                        <TextArea fx:id="aiDiagnosisTextArea" editable="false" wrapText="true"
-                                  style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
-                                  VBox.vgrow="ALWAYS">
+                        <HBox spacing="10.0" alignment="CENTER_LEFT">
+                            <Label text="AI 诊断结果" style="-fx-font-size: 14px; -fx-font-weight: bold;"/>
+                            <Button fx:id="cancelAIDiagnosisButton" text="取消诊断" 
+                                    onAction="#onCancelAIDiagnosisClick"
+                                    style="-fx-pref-width: 100px; -fx-background-color: #ff9800; -fx-text-fill: white;"
+                                    visible="false" managed="false">
+                                <HBox.margin>
+                                    <Insets left="10.0"/>
+                                </HBox.margin>
+                            </Button>
+                        </HBox>
+                        <!-- 使用 WebView 替代 TextArea，支持 Markdown 渲染 -->
+                        <WebView fx:id="aiDiagnosisWebView" VBox.vgrow="ALWAYS">
                             <VBox.margin>
                                 <Insets top="5.0"/>
                             </VBox.margin>
-                        </TextArea>
+                        </WebView>
                         <ProgressIndicator fx:id="aiDiagnosisProgress" visible="false" 
                                            style="-fx-pref-width: 30px; -fx-pref-height: 30px;">
                             <VBox.margin>
