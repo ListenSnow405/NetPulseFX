@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.SplitPane?>
+<?import javafx.scene.control.Tab?>
+<?import javafx.scene.control.TabPane?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.control.TextArea?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.ProgressIndicator?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.VBox?>
+
+<!--
+    历史数据查看窗口布局文件
+    使用 TableView 显示流量历史记录
+-->
+<VBox spacing="15.0" xmlns="http://javafx.com/javafx"
+      xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.netpulse.netpulsefx.HistoryController"
+      prefHeight="500.0" prefWidth="800.0">
+    <!-- 设置整体内边距 -->
+    <padding>
+        <Insets bottom="20.0" left="20.0" right="20.0" top="20.0"/>
+    </padding>
+
+    <!-- 标题 -->
+    <Label text="流量历史数据" style="-fx-font-size: 18px; -fx-font-weight: bold;"/>
+
+    <!-- 状态标签：显示加载状态或记录数量 -->
+    <Label fx:id="statusLabel" text="正在加载数据..." style="-fx-font-size: 12px;"/>
+
+    <!-- 使用 TabPane 切换会话列表和详细记录 -->
+    <TabPane fx:id="mainTabPane" VBox.vgrow="ALWAYS">
+        <!-- 监控会话列表标签页 -->
+        <Tab text="监控会话列表" closable="false">
+            <SplitPane dividerPositions="0.7" VBox.vgrow="ALWAYS">
+                <!-- 左侧：会话列表表格 -->
+                <TableView fx:id="sessionTable" VBox.vgrow="ALWAYS">
+                    <columns>
+                        <TableColumn fx:id="sessionIdColumn" text="会话ID" prefWidth="80.0" />
+                        <TableColumn fx:id="sessionIfaceColumn" text="网卡名称" prefWidth="150.0" />
+                        <TableColumn fx:id="sessionStartTimeColumn" text="开始时间" prefWidth="180.0" />
+                        <TableColumn fx:id="sessionEndTimeColumn" text="结束时间" prefWidth="180.0" />
+                        <TableColumn fx:id="sessionDurationColumn" text="持续时间(秒)" prefWidth="120.0" />
+                        <TableColumn fx:id="sessionAvgDownColumn" text="平均下行(KB/s)" prefWidth="130.0" />
+                        <TableColumn fx:id="sessionAvgUpColumn" text="平均上行(KB/s)" prefWidth="130.0" />
+                        <TableColumn fx:id="sessionMaxDownColumn" text="最大下行(KB/s)" prefWidth="130.0" />
+                        <TableColumn fx:id="sessionMaxUpColumn" text="最大上行(KB/s)" prefWidth="130.0" />
+                        <TableColumn fx:id="sessionRecordCountColumn" text="记录数" prefWidth="80.0" />
+                    </columns>
+                </TableView>
+                
+                <!-- 右侧：会话详情 -->
+                <VBox spacing="10.0" style="-fx-padding: 15px;" VBox.vgrow="ALWAYS">
+                    <Label text="会话详情" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+                    <TextArea fx:id="sessionDetailTextArea" editable="false" wrapText="true"
+                              style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
+                              prefHeight="150.0">
+                        <VBox.margin>
+                            <Insets top="5.0"/>
+                        </VBox.margin>
+                    </TextArea>
+                    <HBox spacing="10.0">
+                        <Button fx:id="viewSessionDetailsButton" text="查看详细记录" 
+                                onAction="#onViewSessionDetailsClick"
+                                style="-fx-pref-width: 150px;"/>
+                        <Button fx:id="aiDiagnosisButton" text="AI 诊断" 
+                                onAction="#onAIDiagnosisClick"
+                                style="-fx-pref-width: 150px; -fx-background-color: #4a90e2; -fx-text-fill: white;"/>
+                        <Button fx:id="deleteSessionButton" text="删除会话" 
+                                onAction="#onDeleteSessionClick"
+                                style="-fx-pref-width: 150px; -fx-background-color: #ff6b6b; -fx-text-fill: white;"/>
+                    </HBox>
+                    
+                    <!-- AI 诊断结果展示区域 -->
+                    <VBox spacing="5.0" VBox.vgrow="ALWAYS" visible="false" managed="false" fx:id="aiDiagnosisContainer">
+                        <VBox.margin>
+                            <Insets top="10.0"/>
+                        </VBox.margin>
+                        <Label text="AI 诊断结果" style="-fx-font-size: 14px; -fx-font-weight: bold;"/>
+                        <TextArea fx:id="aiDiagnosisTextArea" editable="false" wrapText="true"
+                                  style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
+                                  VBox.vgrow="ALWAYS">
+                            <VBox.margin>
+                                <Insets top="5.0"/>
+                            </VBox.margin>
+                        </TextArea>
+                        <ProgressIndicator fx:id="aiDiagnosisProgress" visible="false" 
+                                           style="-fx-pref-width: 30px; -fx-pref-height: 30px;">
+                            <VBox.margin>
+                                <Insets top="5.0"/>
+                            </VBox.margin>
+                        </ProgressIndicator>
+                    </VBox>
+                </VBox>
+            </SplitPane>
+        </Tab>
+        
+        <!-- 详细记录标签页 -->
+        <Tab text="详细记录" closable="false">
+            <!-- 使用 SplitPane 分割主表格和侧边栏 -->
+            <SplitPane dividerPositions="0.7" VBox.vgrow="ALWAYS">
+        <!-- 左侧：历史数据表格 -->
+        <TableView fx:id="historyTable" VBox.vgrow="ALWAYS">
+            <!-- 设置表格列 -->
+            <columns>
+                <!-- ID 列 -->
+                <TableColumn fx:id="idColumn" text="ID" prefWidth="60.0" />
+                
+                <!-- 网卡名称列 -->
+                <TableColumn fx:id="ifaceNameColumn" text="网卡名称" prefWidth="150.0" />
+                
+                <!-- 下行速度列 -->
+                <TableColumn fx:id="downSpeedColumn" text="下行速度 (KB/s)" prefWidth="130.0" />
+                
+            <!-- 上行速度列 -->
+            <TableColumn fx:id="upSpeedColumn" text="上行速度 (KB/s)" prefWidth="130.0" />
+            
+            <!-- 源IP地址列 -->
+            <TableColumn fx:id="sourceIpColumn" text="源IP" prefWidth="150.0" />
+            
+            <!-- 目标IP地址列 -->
+            <TableColumn fx:id="destIpColumn" text="目标IP" prefWidth="150.0" />
+            
+            <!-- 进程名称列 -->
+            <TableColumn fx:id="processNameColumn" text="进程名称" prefWidth="200.0" />
+            
+            <!-- 捕获时间列 -->
+            <TableColumn fx:id="captureTimeColumn" text="捕获时间" prefWidth="200.0" />
+            </columns>
+        </TableView>
+        
+        <!-- 右侧：IP 归属地查询侧边栏 -->
+        <VBox spacing="10.0" style="-fx-padding: 15px;">
+            <Label text="IP 归属地查询" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+            
+            <!-- IP 输入区域 -->
+            <VBox spacing="5.0">
+                <Label text="输入 IP 地址：" style="-fx-font-size: 12px;"/>
+                <HBox spacing="5.0">
+                    <TextField fx:id="ipInputField" promptText="例如: 8.8.8.8" 
+                               style="-fx-pref-width: 200px;"/>
+                    <Button fx:id="queryIpButton" text="查询" 
+                            onAction="#onQueryIpButtonClick"
+                            style="-fx-pref-width: 80px;"/>
+                </HBox>
+            </VBox>
+            
+            <!-- IP 归属地信息显示区域 -->
+            <VBox spacing="5.0" VBox.vgrow="ALWAYS">
+                <Label text="地理位置信息：" style="-fx-font-size: 12px;"/>
+                <TextArea fx:id="ipLocationTextArea" editable="false" wrapText="true"
+                          style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
+                          VBox.vgrow="ALWAYS">
+                    <VBox.margin>
+                        <Insets top="5.0"/>
+                    </VBox.margin>
+                </TextArea>
+            </VBox>
+            
+            <!-- 提示信息 -->
+            <Label fx:id="ipQueryStatusLabel" text="点击表格行或输入 IP 地址进行查询" 
+                   style="-fx-font-size: 11px; -fx-text-fill: gray;"/>
+        </VBox>
+            </SplitPane>
+        </Tab>
+    </TabPane>
+
+    <!-- 底部按钮区域 -->
+    <HBox spacing="10.0" alignment="CENTER_RIGHT">
+        <!-- 刷新按钮 -->
+        <Button fx:id="refreshButton" text="刷新" onAction="#onRefreshButtonClick" 
+                style="-fx-pref-width: 100px;"/>
+        
+        <!-- 关闭按钮 -->
+        <Button fx:id="closeButton" text="关闭" onAction="#onCloseButtonClick"
+                style="-fx-pref-width: 100px;"/>
+    </HBox>
+</VBox>
+
+
+

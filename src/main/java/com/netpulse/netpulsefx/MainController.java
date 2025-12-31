@@ -1,15 +1,15 @@
 package com.netpulse.netpulsefx;
 
 import com.netpulse.netpulsefx.exception.NetworkInterfaceException;
-import com.netpulse.netpulsefx.model.AIConfig;
-import com.netpulse.netpulsefx.model.TrafficData;
-import com.netpulse.netpulsefx.service.AIService;
+import com.netpulse.netpulsefx.model.ProcessTrafficModel;
 import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.NetworkInterfaceService;
+import com.netpulse.netpulsefx.service.ProcessContextService;
 import com.netpulse.netpulsefx.task.TrafficMonitorTask;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.collections.transformation.SortedList;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
@@ -19,18 +19,21 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TableCell;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.XYChart;
 import javafx.stage.Stage;
 import org.pcap4j.core.PcapNetworkInterface;
 
 import java.text.SimpleDateFormat;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -75,21 +78,29 @@ public class MainController {
     @FXML
     private Button stopMonitorButton;
     
-    /** AI 分析按钮 */
-    @FXML
-    private Button aiAnalyzeButton;
-    
-    /** AI 状态标签 */
-    @FXML
-    private Label aiStatusLabel;
-    
-    /** AI 诊断报告文本区域 */
-    @FXML
-    private TextArea aiReportTextArea;
-    
     /** 实时流量波形图 */
     @FXML
     private LineChart<String, Number> trafficChart;
+    
+    /** 进程流量表格 */
+    @FXML
+    private TableView<ProcessTrafficModel> processTrafficTable;
+    
+    /** 进程名称列 */
+    @FXML
+    private TableColumn<ProcessTrafficModel, String> processNameColumn;
+    
+    /** 进程 PID 列 */
+    @FXML
+    private TableColumn<ProcessTrafficModel, Integer> processPidColumn;
+    
+    /** 下载速度列 */
+    @FXML
+    private TableColumn<ProcessTrafficModel, Double> processDownloadSpeedColumn;
+    
+    /** 上传速度列 */
+    @FXML
+    private TableColumn<ProcessTrafficModel, Double> processUploadSpeedColumn;
     
     // ========== 数据模型 ==========
     
@@ -106,14 +117,20 @@ public class MainController {
     /** 数据库服务对象：负责流量数据的持久化存储 */
     private DatabaseService databaseService;
     
-    /** AI 服务对象：负责流量数据的智能分析 */
-    private AIService aiService;
+    /** 进程上下文服务：负责识别数据包对应的进程 */
+    private ProcessContextService processContextService;
     
     /** 存储实际的网卡对象列表，用于后续的监控操作 */
     private List<PcapNetworkInterface> pcapNetworkInterfaces;
     
     /** 当前正在监控的网卡名称（用于数据库记录） */
     private String currentMonitoringInterfaceName;
+    
+    /** 当前监控会话 ID */
+    private Integer currentSessionId;
+    
+    /** 进程流量数据锁（用于线程安全） */
+    private final Object processTrafficLock = new Object();
     
     // ========== 流量监控相关 ==========
     
@@ -138,6 +155,23 @@ public class MainController {
     /** 最大数据点数量：保留最近60个数据点（1分钟的数据） */
     private static final int MAX_DATA_POINTS = 60;
     
+    // ========== 进程流量监控相关 ==========
+    
+    /** 进程流量数据源 */
+    private ObservableList<ProcessTrafficModel> processTrafficData;
+    
+    /** 进程流量汇总映射：进程名 -> ProcessTrafficModel（用于快速查找和更新） */
+    private java.util.Map<String, ProcessTrafficModel> processTrafficMap;
+    
+    /** 进程流量更新任务的 Future */
+    private ScheduledFuture<?> processTrafficUpdateFuture;
+    
+    /** 高流量阈值（KB/s），超过此值将显示为高流量 */
+    private static final double HIGH_TRAFFIC_THRESHOLD = 1024.0; // 1 MB/s
+    
+    /** 进程流量临时统计：进程名 -> 流量数据（用于每秒汇总） */
+    private java.util.Map<String, ProcessTrafficData> processTrafficTempMap;
+    
     // ========== 初始化方法 ==========
     
     /**
@@ -158,15 +192,15 @@ public class MainController {
         // 初始化数据库服务（用于保存流量历史数据）
         databaseService = DatabaseService.getInstance();
         
-        // 初始化 AI 服务
-        // 注意：这里使用默认配置，实际项目中可以从配置文件或环境变量读取
-        initializeAIService();
+        // 初始化进程上下文服务
+        processContextService = ProcessContextService.getInstance();
+        processContextService.start(); // 启动后台更新任务
         
         // 初始化流量监控相关组件
         initializeTrafficMonitoring();
         
-        // 初始化 AI 报告区域
-        aiReportTextArea.setPromptText("AI 分析报告将显示在这里...\n\n提示：点击\"AI 分析流量\"按钮，系统将从数据库读取历史流量数据并进行智能分析。");
+        // 初始化进程流量监控
+        initializeProcessTrafficMonitoring();
         
         // 设置自定义的 CellFactory，用于格式化显示网卡信息
         // 这样可以在 ListView 中显示更友好的网卡信息格式
@@ -210,6 +244,113 @@ public class MainController {
             t.setDaemon(true); // 设置为守护线程
             return t;
         });
+    }
+    
+    /**
+     * 初始化进程流量监控
+     * 设置表格列绑定、排序和样式
+     */
+    private void initializeProcessTrafficMonitoring() {
+        // 初始化进程流量映射表
+        processTrafficMap = new java.util.concurrent.ConcurrentHashMap<>();
+        
+        // 初始化临时统计映射表
+        processTrafficTempMap = new java.util.concurrent.ConcurrentHashMap<>();
+        
+        // 创建数据源
+        processTrafficData = FXCollections.observableArrayList();
+        
+        // 配置表格列的数据绑定
+        processNameColumn.setCellValueFactory(new PropertyValueFactory<>("processName"));
+        processPidColumn.setCellValueFactory(new PropertyValueFactory<>("pid"));
+        processDownloadSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("downloadSpeed"));
+        processUploadSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("uploadSpeed"));
+        
+        // 设置下载速度列的格式化显示
+        processDownloadSpeedColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, Double>() {
+            @Override
+            protected void updateItem(Double item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    ProcessTrafficModel model = getTableView().getItems().get(getIndex());
+                    setText(model.getFormattedDownloadSpeed());
+                    
+                    // 根据流量大小设置背景颜色
+                    double totalSpeed = model.getTotalSpeed();
+                    if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
+                        // 高流量：浅红色背景
+                        setStyle("-fx-background-color: #ffcccc;");
+                    } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
+                        // 中等流量：浅黄色背景
+                        setStyle("-fx-background-color: #ffffcc;");
+                    } else {
+                        setStyle("");
+                    }
+                }
+            }
+        });
+        
+        // 设置上传速度列的格式化显示
+        processUploadSpeedColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, Double>() {
+            @Override
+            protected void updateItem(Double item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    ProcessTrafficModel model = getTableView().getItems().get(getIndex());
+                    setText(model.getFormattedUploadSpeed());
+                    
+                    // 根据流量大小设置背景颜色
+                    double totalSpeed = model.getTotalSpeed();
+                    if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
+                        setStyle("-fx-background-color: #ffcccc;");
+                    } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
+                        setStyle("-fx-background-color: #ffffcc;");
+                    } else {
+                        setStyle("");
+                    }
+                }
+            }
+        });
+        
+        // 设置进程名称列的背景颜色（整行）
+        processNameColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, String>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setStyle("");
+                } else {
+                    setText(item);
+                    ProcessTrafficModel model = getTableView().getItems().get(getIndex());
+                    double totalSpeed = model.getTotalSpeed();
+                    if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
+                        setStyle("-fx-background-color: #ffcccc;");
+                    } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
+                        setStyle("-fx-background-color: #ffffcc;");
+                    } else {
+                        setStyle("");
+                    }
+                }
+            }
+        });
+        
+        // 创建排序列表：按下载速度从高到低排序
+        SortedList<ProcessTrafficModel> sortedData = new SortedList<>(processTrafficData);
+        sortedData.comparatorProperty().bind(processTrafficTable.comparatorProperty());
+        
+        // 设置默认排序：按下载速度降序
+        processDownloadSpeedColumn.setSortType(TableColumn.SortType.DESCENDING);
+        processTrafficTable.getSortOrder().add(processDownloadSpeedColumn);
+        
+        // 绑定排序后的数据到表格
+        processTrafficTable.setItems(sortedData);
     }
     
     // ========== 事件处理方法 ==========
@@ -290,44 +431,71 @@ public class MainController {
                 // 保存当前监控的网卡名称（用于数据库记录）
                 currentMonitoringInterfaceName = selectedInterface.getName();
                 
-                // 清空图表数据
-                trafficSeries.getData().clear();
-                
-                // 创建流量监控任务
-                trafficMonitorTask = new TrafficMonitorTask(selectedInterface);
-                
-                // 设置任务失败时的回调
-                trafficMonitorTask.setOnFailed(e -> {
-                    Platform.runLater(() -> {
-                        Throwable exception = trafficMonitorTask.getException();
-                        showAlert(Alert.AlertType.ERROR, "监控失败", 
-                                "启动流量监控时发生错误：\n" + 
-                                (exception != null ? exception.getMessage() : "未知错误"));
-                        resetMonitorButtons();
+                // 创建新的监控会话
+                databaseService.startNewSession(currentMonitoringInterfaceName)
+                    .thenAccept(sessionId -> {
+                        currentSessionId = sessionId;
+                        System.out.println("[MainController] 监控会话已创建: session_id=" + sessionId);
+                        
+                        // 清空图表数据
+                        Platform.runLater(() -> trafficSeries.getData().clear());
+                        
+                        // 创建流量监控任务
+                        trafficMonitorTask = new TrafficMonitorTask(selectedInterface);
+                        
+                        // 设置任务失败时的回调
+                        trafficMonitorTask.setOnFailed(e -> {
+                            Platform.runLater(() -> {
+                                Throwable exception = trafficMonitorTask.getException();
+                                showAlert(Alert.AlertType.ERROR, "监控失败", 
+                                        "启动流量监控时发生错误：\n" + 
+                                        (exception != null ? exception.getMessage() : "未知错误"));
+                                resetMonitorButtons();
+                            });
+                        });
+                        
+                        // 启动监控任务（在后台线程执行）
+                        Thread monitorThread = new Thread(trafficMonitorTask);
+                        monitorThread.setDaemon(true);
+                        monitorThread.start();
+                        
+                        // 启动定时更新任务
+                        Platform.runLater(() -> {
+                            // 启动定时更新任务
+                            // 每秒执行一次，读取流量数据并更新图表
+                            updateTaskFuture = scheduler.scheduleAtFixedRate(
+                                    this::updateTrafficChart,  // 要执行的任务
+                                    1,                         // 初始延迟（秒）
+                                    1,                         // 执行间隔（秒）
+                                    TimeUnit.SECONDS
+                            );
+                            
+                            // 启动进程流量更新任务
+                            // 每秒执行一次，汇总进程流量并更新表格
+                            processTrafficUpdateFuture = scheduler.scheduleAtFixedRate(
+                                    this::updateProcessTrafficTable,  // 要执行的任务
+                                    1,                                // 初始延迟（秒）
+                                    1,                                // 执行间隔（秒）
+                                    TimeUnit.SECONDS
+                            );
+                            
+                            // 更新UI状态
+                            startMonitorButton.setDisable(true);
+                            stopMonitorButton.setDisable(false);
+                            refreshButton.setDisable(true);
+                            networkInterfaceListView.setDisable(true);
+                            
+                            titleLabel.setText("正在监控：" + selectedInterface.getDescription());
+                        });
+                    })
+                    .exceptionally(e -> {
+                        Platform.runLater(() -> {
+                            showAlert(Alert.AlertType.ERROR, "创建会话失败", 
+                                    "无法创建监控会话：\n" + e.getMessage());
+                            resetMonitorButtons();
+                        });
+                        return null;
                     });
-                });
-                
-                // 启动监控任务（在后台线程执行）
-                Thread monitorThread = new Thread(trafficMonitorTask);
-                monitorThread.setDaemon(true);
-                monitorThread.start();
-                
-                // 启动定时更新任务
-                // 每秒执行一次，读取流量数据并更新图表
-                updateTaskFuture = scheduler.scheduleAtFixedRate(
-                        this::updateTrafficChart,  // 要执行的任务
-                        1,                         // 初始延迟（秒）
-                        1,                         // 执行间隔（秒）
-                        TimeUnit.SECONDS
-                );
-                
-                // 更新UI状态
-                startMonitorButton.setDisable(true);
-                stopMonitorButton.setDisable(false);
-                refreshButton.setDisable(true);
-                networkInterfaceListView.setDisable(true);
-                
-                titleLabel.setText("正在监控：" + selectedInterface.getDescription());
                 
             } catch (Exception e) {
                 showAlert(Alert.AlertType.ERROR, "启动失败", 
@@ -347,203 +515,6 @@ public class MainController {
     }
     
     /**
-     * AI 分析按钮的点击事件处理
-     * 从数据库获取历史流量数据，调用 AI 服务进行分析
-     */
-    @FXML
-    protected void onAIAnalyzeButtonClick() {
-        // 禁用按钮，防止重复点击
-        aiAnalyzeButton.setDisable(true);
-        aiStatusLabel.setText("正在从数据库加载历史数据...");
-        aiReportTextArea.clear();
-        
-        // 创建后台任务：获取历史数据并调用 AI 分析
-        Task<String> analyzeTask = new Task<String>() {
-            @Override
-            protected String call() throws Exception {
-                // 第一步：从数据库获取历史数据
-                updateMessage("正在从数据库加载历史数据...");
-                List<DatabaseService.TrafficRecord> records = 
-                    databaseService.queryAllTrafficHistoryAsync().get();
-                
-                if (records.isEmpty()) {
-                    return "提示：数据库中没有流量历史数据。\n\n请先进行流量监控，收集一些数据后再尝试 AI 分析。";
-                }
-                
-                // 第二步：转换为 TrafficData 对象
-                updateMessage("正在准备分析数据（" + records.size() + " 条记录）...");
-                List<TrafficData> trafficDataList = convertToTrafficData(records);
-                
-                // 第三步：调用 AI 服务进行分析
-                updateMessage("正在调用 AI 服务进行分析，请稍候...");
-                return aiService.analyzeTraffic(trafficDataList).get();
-            }
-            
-            @Override
-            protected void succeeded() {
-                // 分析成功，更新 UI
-                Platform.runLater(() -> {
-                    String result = getValue();
-                    aiReportTextArea.setText(result);
-                    aiStatusLabel.setText("分析完成");
-                    aiAnalyzeButton.setDisable(false);
-                });
-            }
-            
-            @Override
-            protected void failed() {
-                // 分析失败，显示错误信息
-                Platform.runLater(() -> {
-                    Throwable exception = getException();
-                    String errorMsg = "分析失败：" + 
-                        (exception != null ? exception.getMessage() : "未知错误");
-                    aiReportTextArea.setText(errorMsg);
-                    aiStatusLabel.setText("分析失败");
-                    aiAnalyzeButton.setDisable(false);
-                });
-            }
-        };
-        
-        // 监听任务进度更新
-        analyzeTask.messageProperty().addListener((obs, oldMsg, newMsg) -> {
-            if (newMsg != null) {
-                Platform.runLater(() -> aiStatusLabel.setText(newMsg));
-            }
-        });
-        
-        // 启动后台任务
-        Thread analyzeThread = new Thread(analyzeTask);
-        analyzeThread.setDaemon(true);
-        analyzeThread.start();
-    }
-    
-    /**
-     * 初始化 AI 服务
-     * 
-     * <p>从配置中读取 API 信息并创建 AIService 实例。
-     * 优先使用环境变量配置，如果没有设置则使用默认配置。</p>
-     */
-    /**
-     * 清理环境变量值
-     * 去除首尾的引号、空白字符等
-     */
-    private String cleanEnvValue(String value) {
-        if (value == null || value.isEmpty()) {
-            return value;
-        }
-        // 去除首尾空白字符
-        value = value.trim();
-        // 去除首尾的引号（单引号或双引号）
-        if ((value.startsWith("\"") && value.endsWith("\"")) ||
-            (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.substring(1, value.length() - 1);
-        }
-        return value.trim();
-    }
-    
-    private void initializeAIService() {
-        // 尝试从环境变量读取配置，并清理值（去除引号和空白字符）
-        String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
-        String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
-        String apiKey = cleanEnvValue(System.getenv("AI_API_KEY"));
-        String model = cleanEnvValue(System.getenv("AI_MODEL"));
-        
-        // 如果环境变量已设置，使用环境变量配置
-        if (apiEndpoint != null && !apiEndpoint.isEmpty()) {
-            // 使用环境变量配置
-            String finalProvider = apiProvider != null && !apiProvider.isEmpty() 
-                ? apiProvider : "deepseek";
-            String finalModel = model != null && !model.isEmpty() 
-                ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : "gpt-3.5-turbo");
-            String finalApiKey = apiKey != null ? apiKey : "";
-            
-            aiService = new AIService(new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel));
-            
-            System.out.println("[MainController] AI 服务已初始化（环境变量配置）:");
-            System.out.println("  Provider: " + finalProvider);
-            System.out.println("  Endpoint: " + apiEndpoint);
-            System.out.println("  Model: " + finalModel);
-            System.out.println("  API Key: " + (finalApiKey.isEmpty() ? "未设置" : "已设置（长度: " + finalApiKey.length() + "）"));
-        } else {
-            // 环境变量未设置，根据 provider 使用默认配置
-            String finalProvider = (apiProvider != null && !apiProvider.isEmpty()) 
-                ? apiProvider : "ollama";
-            
-            if ("deepseek".equalsIgnoreCase(finalProvider)) {
-                AIConfig config = AIConfig.defaultDeepSeek();
-                String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
-                String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                aiService = new AIService(new AIConfig(
-                    config.getProvider(),
-                    config.getApiEndpoint(),
-                    finalApiKey,
-                    finalModel
-                ));
-                System.out.println("[MainController] AI 服务已初始化（DeepSeek 默认配置）:");
-                System.out.println("  Endpoint: " + config.getApiEndpoint());
-                System.out.println("  Model: " + finalModel);
-                System.out.println("  API Key: " + (finalApiKey.isEmpty() ? "未设置（请在环境变量中设置 AI_API_KEY）" : "已设置"));
-            } else if ("openai".equalsIgnoreCase(finalProvider)) {
-                AIConfig config = AIConfig.defaultOpenAI();
-                String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
-                String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                aiService = new AIService(new AIConfig(
-                    config.getProvider(),
-                    config.getApiEndpoint(),
-                    finalApiKey,
-                    finalModel
-                ));
-                System.out.println("[MainController] AI 服务已初始化（OpenAI 默认配置）");
-            } else {
-                // 默认使用 Ollama（本地）
-                AIConfig config = AIConfig.defaultOllama();
-                String finalModel = (model != null && !model.isEmpty()) ? model : "llama2";
-                aiService = new AIService(new AIConfig(
-                    config.getProvider(),
-                    config.getApiEndpoint(),
-                    config.getApiKey(),
-                    finalModel
-                ));
-                System.out.println("[MainController] AI 服务已初始化（Ollama 默认配置）");
-            }
-        }
-    }
-    
-    /**
-     * 将数据库记录转换为 TrafficData 对象列表
-     * 
-     * @param records 数据库记录列表
-     * @return TrafficData 对象列表
-     */
-    private List<TrafficData> convertToTrafficData(List<DatabaseService.TrafficRecord> records) {
-        List<TrafficData> trafficDataList = new ArrayList<>();
-        
-        for (DatabaseService.TrafficRecord record : records) {
-            // 将 Timestamp 转换为 LocalDateTime
-            LocalDateTime captureTime = record.getCaptureTime().toInstant()
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDateTime();
-            
-            // 计算数据包大小（这里简化为基于速度估算，实际应该从监控任务中获取）
-            // 假设每 KB/s 对应大约 1000 字节/秒的数据包
-            long packetSize = (long)((record.getDownSpeed() + record.getUpSpeed()) * 1000);
-            
-            TrafficData trafficData = new TrafficData(
-                record.getIfaceName(),
-                record.getDownSpeed(),
-                record.getUpSpeed(),
-                captureTime,
-                packetSize,
-                "UNKNOWN"  // 协议信息可以从监控任务中获取，这里暂时使用 UNKNOWN
-            );
-            
-            trafficDataList.add(trafficData);
-        }
-        
-        return trafficDataList;
-    }
-    
-    /**
      * 停止监控的核心方法
      * 确保所有线程和资源都被正确释放
      * 
@@ -558,6 +529,12 @@ public class MainController {
         if (updateTaskFuture != null && !updateTaskFuture.isCancelled()) {
             updateTaskFuture.cancel(false);
             updateTaskFuture = null;
+        }
+        
+        // 取消进程流量更新任务
+        if (processTrafficUpdateFuture != null && !processTrafficUpdateFuture.isCancelled()) {
+            processTrafficUpdateFuture.cancel(false);
+            processTrafficUpdateFuture = null;
         }
         
         // 停止抓包任务
@@ -575,6 +552,28 @@ public class MainController {
             trafficMonitorTask = null;
         }
         
+        // 结束当前监控会话
+        if (currentSessionId != null && databaseService != null) {
+            final int sessionIdToEnd = currentSessionId;
+            databaseService.endSession(sessionIdToEnd)
+                .thenRun(() -> {
+                    System.out.println("[MainController] 监控会话已结束: session_id=" + sessionIdToEnd);
+                })
+                .exceptionally(e -> {
+                    System.err.println("[MainController] 结束监控会话失败: " + e.getMessage());
+                    return null;
+                });
+            currentSessionId = null;
+        }
+        
+        // 清空进程流量数据
+        Platform.runLater(() -> {
+            synchronized (processTrafficLock) {
+                processTrafficMap.clear();
+                processTrafficData.clear();
+            }
+        });
+        
         // 恢复UI状态
         Platform.runLater(this::resetMonitorButtons);
     }
@@ -589,6 +588,7 @@ public class MainController {
         networkInterfaceListView.setDisable(false);
         titleLabel.setText("请选择监控网卡");
         currentMonitoringInterfaceName = null; // 清除当前监控的网卡名称
+        currentSessionId = null; // 清除当前会话ID
     }
     
     /**
@@ -633,23 +633,48 @@ public class MainController {
             String sourceIp = lastIps[0];
             String destIp = lastIps[1];
             
-            // 调试信息：打印捕获的IP地址
-            if (sourceIp != null || destIp != null) {
-                System.out.println("[MainController] 捕获到IP地址 - 源IP: " + 
-                    (sourceIp != null ? sourceIp : "无") + 
-                    ", 目标IP: " + (destIp != null ? destIp : "无"));
+            // 获取进程名称（用于数据库记录）
+            String processName = trafficMonitorTask.getAndClearLastProcessName();
+            
+            // 获取进程流量统计（从 TrafficMonitorTask 中获取所有进程的累计流量）
+            Map<String, Long> processTrafficMap = trafficMonitorTask.getAndClearProcessTraffic();
+            
+            // 汇总进程流量（用于进程流量表格）
+            synchronized (processTrafficLock) {
+                for (Map.Entry<String, Long> entry : processTrafficMap.entrySet()) {
+                    String procName = entry.getKey();
+                    long processBytes = entry.getValue(); // 使用不同的变量名避免冲突
+                    double processKbPerSecond = processBytes / 1024.0; // 转换为 KB/s
+                    
+                    ProcessTrafficData tempData = processTrafficTempMap.computeIfAbsent(
+                        procName, 
+                        k -> new ProcessTrafficData(procName, 0, 0.0, 0.0)
+                    );
+                    // 累加流量（这里简化处理，将总流量平均分配给上下行）
+                    tempData.addTraffic(processKbPerSecond / 2.0, processKbPerSecond / 2.0);
+                }
             }
             
-            if (currentMonitoringInterfaceName != null && databaseService != null) {
-                databaseService.saveTrafficDataAsync(
-                        currentMonitoringInterfaceName,
+            // 调试信息：打印捕获的IP地址和进程信息
+            if (sourceIp != null || destIp != null || !processName.equals("未知进程")) {
+                System.out.println("[MainController] 捕获到数据 - 源IP: " + 
+                    (sourceIp != null ? sourceIp : "无") + 
+                    ", 目标IP: " + (destIp != null ? destIp : "无") +
+                    ", 进程: " + processName);
+            }
+            
+            // 保存明细记录到当前会话
+            if (currentSessionId != null && databaseService != null) {
+                databaseService.saveDetailRecord(
+                        currentSessionId,
                         kbPerSecond,  // 下行速度（当前为总流量）
                         kbPerSecond,  // 上行速度（当前为总流量，未来可扩展为分别统计）
                         sourceIp,     // 源IP地址
-                        destIp        // 目标IP地址
+                        destIp,       // 目标IP地址
+                        processName   // 进程名称
                 ).exceptionally(e -> {
                     // 数据库保存失败时，只记录错误，不影响 UI 显示
-                    System.err.println("[MainController] 保存流量数据到数据库失败: " + e.getMessage());
+                    System.err.println("[MainController] 保存流量明细记录失败: " + e.getMessage());
                     return null;
                 });
             }
@@ -811,12 +836,180 @@ public class MainController {
     }
     
     /**
+     * 更新进程流量表格
+     * 每秒执行一次，汇总进程流量并更新表格显示
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>从临时统计映射表中获取所有进程的流量数据</li>
+     *   <li>通过 ProcessContextService 查找每个进程的 PID</li>
+     *   <li>更新或创建 ProcessTrafficModel</li>
+     *   <li>清空临时统计，准备下一秒的统计</li>
+     * </ol>
+     */
+    private void updateProcessTrafficTable() {
+        if (trafficMonitorTask == null || !trafficMonitorTask.isMonitoringActive()) {
+            return;
+        }
+        
+        try {
+            // 在后台线程中汇总数据
+            java.util.Map<String, ProcessTrafficData> snapshot = new java.util.HashMap<>();
+            
+            synchronized (processTrafficLock) {
+                snapshot.putAll(processTrafficTempMap);
+                // 清空临时统计，准备下一秒的统计
+                processTrafficTempMap.clear();
+            }
+            
+            // 获取进程上下文服务，用于获取 PID
+            final ProcessContextService processService = processContextService;
+            
+            // 在主线程中更新 UI
+            Platform.runLater(() -> {
+                synchronized (processTrafficLock) {
+                    // 更新或创建进程流量模型
+                    for (ProcessTrafficData tempData : snapshot.values()) {
+                        String processName = tempData.getProcessName();
+                        
+                        // 如果流量为 0，跳过（避免显示无流量的进程）
+                        if (tempData.getDownloadSpeed() < 0.01 && tempData.getUploadSpeed() < 0.01) {
+                            continue;
+                        }
+                        
+                        ProcessTrafficModel model = processTrafficMap.get(processName);
+                        
+                        if (model == null) {
+                            // 创建新模型
+                            // 尝试获取 PID（通过 ProcessContextService 的映射表查找）
+                            Integer pid = findPidByProcessName(processName, processService);
+                            model = new ProcessTrafficModel(processName, pid, 0.0, 0.0);
+                            processTrafficMap.put(processName, model);
+                            processTrafficData.add(model);
+                        }
+                        
+                        // 更新流量数据
+                        model.updateTraffic(tempData.getDownloadSpeed(), tempData.getUploadSpeed());
+                    }
+                    
+                    // 将流量为 0 的进程设置为 0（保留在表格中，但显示为 0）
+                    // 如果需要完全移除，可以添加逻辑：如果流量为 0 且持续一段时间，则移除
+                    for (ProcessTrafficModel model : processTrafficMap.values()) {
+                        boolean found = false;
+                        for (ProcessTrafficData tempData : snapshot.values()) {
+                            if (tempData.getProcessName().equals(model.getProcessName())) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found && model.getTotalSpeed() > 0) {
+                            // 该进程在本秒没有流量，但保留显示（可以逐渐衰减）
+                            // 这里选择保留，实际可以根据需求调整
+                        }
+                    }
+                }
+            });
+            
+        } catch (Exception e) {
+            System.err.println("[MainController] 更新进程流量表格时发生错误: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 根据进程名查找 PID
+     * 
+     * <p>通过 ProcessContextService 的连接映射表查找对应的 PID。</p>
+     * 
+     * @param processName 进程名称
+     * @param processService 进程上下文服务
+     * @return PID，如果找不到则返回 null
+     */
+    private Integer findPidByProcessName(String processName, ProcessContextService processService) {
+        // 这里简化实现：通过进程名查找 PID
+        // 实际实现中，可以通过 ProcessContextService 的统计信息或映射表查找
+        // 或者通过 Java 的 ProcessHandle API 查找
+        
+        try {
+            // 尝试通过进程名查找 PID（使用 ProcessHandle）
+            java.util.Optional<java.lang.ProcessHandle> handleOpt = 
+                java.lang.ProcessHandle.allProcesses()
+                    .filter(ph -> {
+                        try {
+                            java.util.Optional<String> cmdOpt = ph.info().command();
+                            if (cmdOpt.isPresent()) {
+                                String cmd = cmdOpt.get();
+                                String[] parts = cmd.replace("\\", "/").split("/");
+                                if (parts.length > 0) {
+                                    return parts[parts.length - 1].equalsIgnoreCase(processName);
+                                }
+                            }
+                        } catch (Exception e) {
+                            // 忽略异常
+                        }
+                        return false;
+                    })
+                    .findFirst();
+            
+            if (handleOpt.isPresent()) {
+                return (int) handleOpt.get().pid();
+            }
+        } catch (Exception e) {
+            // 查找失败，返回 null
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 进程流量临时数据类（用于每秒汇总）
+     */
+    private static class ProcessTrafficData {
+        private final String processName;
+        private final Integer pid;
+        private double downloadSpeed;
+        private double uploadSpeed;
+        
+        public ProcessTrafficData(String processName, Integer pid, double downloadSpeed, double uploadSpeed) {
+            this.processName = processName;
+            this.pid = pid;
+            this.downloadSpeed = downloadSpeed;
+            this.uploadSpeed = uploadSpeed;
+        }
+        
+        public void addTraffic(double downSpeed, double upSpeed) {
+            this.downloadSpeed += downSpeed;
+            this.uploadSpeed += upSpeed;
+        }
+        
+        public String getProcessName() {
+            return processName;
+        }
+        
+        public Integer getPid() {
+            return pid;
+        }
+        
+        public double getDownloadSpeed() {
+            return downloadSpeed;
+        }
+        
+        public double getUploadSpeed() {
+            return uploadSpeed;
+        }
+    }
+    
+    /**
      * 清理资源
      * 在 Controller 销毁时调用，确保所有线程和资源都被正确释放
      */
     public void cleanup() {
         // 停止监控
         stopMonitoring();
+        
+        // 停止进程上下文服务
+        if (processContextService != null) {
+            processContextService.stop();
+        }
         
         // 关闭定时任务执行器
         if (scheduler != null && !scheduler.isShutdown()) {

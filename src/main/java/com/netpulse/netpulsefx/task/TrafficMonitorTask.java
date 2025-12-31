@@ -1,9 +1,12 @@
 package com.netpulse.netpulsefx.task;
 
+import com.netpulse.netpulsefx.service.ProcessContextService;
 import javafx.concurrent.Task;
 import org.pcap4j.core.*;
 import org.pcap4j.packet.Packet;
 import org.pcap4j.packet.IpPacket;
+import org.pcap4j.packet.TcpPacket;
+import org.pcap4j.packet.UdpPacket;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,11 +45,26 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     private final Map<String, Integer> ipAddressCounts;
     
+    /** 进程流量统计：用于存储每个进程的累计流量
+     * Key: 进程名称, Value: 累计字节数
+     * 使用 ConcurrentHashMap 确保线程安全
+     */
+    private final Map<String, Long> processTrafficBytes;
+    
     /** 最近捕获的源IP地址（用于传递给数据库） */
     private volatile String lastSourceIp;
     
     /** 最近捕获的目标IP地址（用于传递给数据库） */
     private volatile String lastDestIp;
+    
+    /** 最近捕获的本地端口（用于查找进程） */
+    private volatile Integer lastLocalPort;
+    
+    /** 最近捕获的进程名称 */
+    private volatile String lastProcessName;
+    
+    /** 进程上下文服务 */
+    private final ProcessContextService processContextService;
     
     /** Pcap 句柄：用于数据包捕获 */
     private PcapHandle pcapHandle;
@@ -63,8 +81,12 @@ public class TrafficMonitorTask extends Task<Void> {
         this.networkInterface = networkInterface;
         this.bytesCaptured = new AtomicLong(0);
         this.ipAddressCounts = new ConcurrentHashMap<>();
+        this.processTrafficBytes = new ConcurrentHashMap<>();
         this.lastSourceIp = null;
         this.lastDestIp = null;
+        this.lastLocalPort = null;
+        this.lastProcessName = null;
+        this.processContextService = ProcessContextService.getInstance();
         this.monitoringActive = false;
     }
     
@@ -232,11 +254,65 @@ public class TrafficMonitorTask extends Task<Void> {
                 // 统计IP地址出现次数（可选，用于分析）
                 ipAddressCounts.merge(sourceIp, 1, Integer::sum);
                 ipAddressCounts.merge(destIp, 1, Integer::sum);
+                
+                // 提取端口信息并查找进程，同时统计进程流量
+                extractPortAndProcess(ipPacket, sourceIp, packet.length());
             }
         } catch (Exception e) {
             // 如果数据包不是IP数据包或解析失败，忽略错误
             // 这很常见，因为可能捕获到ARP、ICMP等其他类型的包
             // 不记录错误，避免日志过多
+        }
+    }
+    
+    /**
+     * 提取端口信息并查找对应进程
+     * 
+     * @param ipPacket IP 数据包
+     * @param sourceIp 源IP地址
+     * @param packetSize 数据包大小（字节）
+     */
+    private void extractPortAndProcess(IpPacket ipPacket, String sourceIp, int packetSize) {
+        try {
+            String processName = null;
+            int localPort = 0;
+            
+            // 尝试获取 TCP 数据包
+            TcpPacket tcpPacket = ipPacket.get(TcpPacket.class);
+            if (tcpPacket != null) {
+                int srcPort = tcpPacket.getHeader().getSrcPort().valueAsInt();
+                // 判断是否为本地端口（源IP是本地地址）
+                if (!isPublicIP(sourceIp) || sourceIp.startsWith("192.168.") || 
+                    sourceIp.startsWith("10.") || sourceIp.startsWith("172.")) {
+                    localPort = srcPort;
+                    // 查找进程
+                    processName = processContextService.findProcessByPacket(sourceIp, srcPort);
+                }
+            } else {
+                // 尝试获取 UDP 数据包
+                UdpPacket udpPacket = ipPacket.get(UdpPacket.class);
+                if (udpPacket != null) {
+                    int srcPort = udpPacket.getHeader().getSrcPort().valueAsInt();
+                    // 判断是否为本地端口
+                    if (!isPublicIP(sourceIp) || sourceIp.startsWith("192.168.") || 
+                        sourceIp.startsWith("10.") || sourceIp.startsWith("172.")) {
+                        localPort = srcPort;
+                        // 查找进程
+                        processName = processContextService.findProcessByPacket(sourceIp, srcPort);
+                    }
+                }
+            }
+            
+            // 更新最近捕获的进程信息
+            if (processName != null && !processName.equals("未知进程")) {
+                lastProcessName = processName;
+                lastLocalPort = localPort;
+                
+                // 累加进程流量统计
+                processTrafficBytes.merge(processName, (long) packetSize, Long::sum);
+            }
+        } catch (Exception e) {
+            // 端口提取失败，忽略错误
         }
     }
     
@@ -318,6 +394,18 @@ public class TrafficMonitorTask extends Task<Void> {
     }
     
     /**
+     * 获取并清空最近捕获的进程信息（原子操作）
+     * 
+     * @return 进程名称，如果未找到则返回"未知进程"
+     */
+    public String getAndClearLastProcessName() {
+        String result = lastProcessName != null ? lastProcessName : "未知进程";
+        lastProcessName = null;
+        lastLocalPort = null;
+        return result;
+    }
+    
+    /**
      * 获取IP地址统计信息（用于调试或分析）
      * 
      * @return IP地址出现次数的映射（只读副本）
@@ -331,6 +419,28 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     public void clearIpAddressCounts() {
         ipAddressCounts.clear();
+    }
+    
+    /**
+     * 获取并清空进程流量统计（原子操作）
+     * 
+     * <p>用于在读取进程流量后清空，避免重复使用旧数据。</p>
+     * 
+     * @return 进程流量映射：进程名 -> 累计字节数
+     */
+    public Map<String, Long> getAndClearProcessTraffic() {
+        Map<String, Long> result = new ConcurrentHashMap<>(processTrafficBytes);
+        processTrafficBytes.clear();
+        return result;
+    }
+    
+    /**
+     * 获取进程流量统计（只读）
+     * 
+     * @return 进程流量映射的副本
+     */
+    public Map<String, Long> getProcessTraffic() {
+        return new ConcurrentHashMap<>(processTrafficBytes);
     }
 }
 
