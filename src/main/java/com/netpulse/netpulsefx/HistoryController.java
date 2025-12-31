@@ -7,6 +7,7 @@ import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.IPLocationService;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.fxml.FXML;
@@ -54,10 +55,6 @@ public class HistoryController {
     /** ID 列 */
     @FXML
     private TableColumn<TrafficRecordDisplay, Long> idColumn;
-    
-    /** 网卡名称列 */
-    @FXML
-    private TableColumn<TrafficRecordDisplay, String> ifaceNameColumn;
     
     /** 下行速度列 */
     @FXML
@@ -223,7 +220,6 @@ public class HistoryController {
         
         // 配置详细记录表格列的数据绑定
         idColumn.setCellValueFactory(new PropertyValueFactory<>("id"));
-        ifaceNameColumn.setCellValueFactory(new PropertyValueFactory<>("ifaceName"));
         downSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("downSpeed"));
         upSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("upSpeed"));
         sourceIpColumn.setCellValueFactory(new PropertyValueFactory<>("sourceIp"));
@@ -283,14 +279,22 @@ public class HistoryController {
             }
         );
         
+        // 设置会话列表表格为多选模式
+        sessionTable.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
+        
         // 设置会话列表表格行选择监听器
-        sessionTable.getSelectionModel().selectedItemProperty().addListener(
-            (observable, oldValue, newValue) -> {
-                if (newValue != null) {
-                    onSessionRowSelected(newValue);
+        sessionTable.getSelectionModel().getSelectedItems().addListener(
+            (ListChangeListener.Change<? extends SessionDisplay> change) -> {
+                // 当选择发生变化时更新 UI
+                updateDeleteButtonState();
+                
+                // 如果有选中项，显示第一个选中项的详情
+                if (!sessionTable.getSelectionModel().getSelectedItems().isEmpty()) {
+                    SessionDisplay firstSelected = sessionTable.getSelectionModel().getSelectedItems().get(0);
+                    onSessionRowSelected(firstSelected);
+                } else {
+                    sessionDetailTextArea.setText("");
                 }
-                // 更新删除按钮的启用状态
-                deleteSessionButton.setDisable(newValue == null);
             }
         );
         
@@ -552,43 +556,155 @@ public class HistoryController {
     }
     
     /**
-     * 删除会话按钮点击事件
+     * 删除会话按钮点击事件（支持单个和批量删除）
      */
     @FXML
     protected void onDeleteSessionClick() {
-        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
-        if (selectedSession == null) {
-            showAlert(Alert.AlertType.WARNING, "未选择会话", "请先选择一个要删除的监控会话。");
+        ObservableList<SessionDisplay> selectedSessions = sessionTable.getSelectionModel().getSelectedItems();
+        
+        if (selectedSessions.isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "未选择会话", "请先选择一个或多个要删除的监控会话。\n\n提示：按住 Ctrl 键可多选。");
             return;
         }
         
-        // 显示确认对话框
-        Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION);
-        confirmAlert.setTitle("确认删除");
-        confirmAlert.setHeaderText("删除监控会话");
-        confirmAlert.setContentText(
-            String.format(
+        int selectedCount = selectedSessions.size();
+        boolean isBatchDelete = selectedCount > 1;
+        
+        // 构建确认对话框内容
+        StringBuilder content = new StringBuilder();
+        if (isBatchDelete) {
+            content.append(String.format("确定要删除 %d 个监控会话吗？\n\n", selectedCount));
+            
+            // 计算总记录数
+            int totalRecords = selectedSessions.stream()
+                    .mapToInt(SessionDisplay::getRecordCount)
+                    .sum();
+            
+            content.append(String.format("总共将删除 %d 条明细记录。\n\n", totalRecords));
+            
+            // 列出前 5 个会话的信息（避免对话框过长）
+            content.append("选中的会话：\n");
+            int displayCount = Math.min(5, selectedCount);
+            for (int i = 0; i < displayCount; i++) {
+                SessionDisplay session = selectedSessions.get(i);
+                content.append(String.format("  - 会话 #%d (%s, %d 条记录)\n",
+                    session.getSessionId(),
+                    session.getIfaceName(),
+                    session.getRecordCount()));
+            }
+            if (selectedCount > 5) {
+                content.append(String.format("  ... 还有 %d 个会话\n", selectedCount - 5));
+            }
+        } else {
+            SessionDisplay selectedSession = selectedSessions.get(0);
+            content.append(String.format(
                 "确定要删除会话 #%d 吗？\n\n" +
                 "网卡: %s\n" +
                 "开始时间: %s\n" +
-                "记录数: %d 条\n\n" +
-                "注意：删除会话将同时删除所有关联的明细记录，此操作不可恢复！",
+                "记录数: %d 条\n",
                 selectedSession.getSessionId(),
                 selectedSession.getIfaceName(),
                 selectedSession.getStartTime(),
                 selectedSession.getRecordCount()
-            )
-        );
+            ));
+        }
+        
+        content.append("\n注意：删除会话将同时删除所有关联的明细记录，此操作不可恢复！");
+        
+        // 显示确认对话框
+        Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmAlert.setTitle("确认删除");
+        confirmAlert.setHeaderText(isBatchDelete ? "批量删除监控会话" : "删除监控会话");
+        confirmAlert.setContentText(content.toString());
         
         confirmAlert.showAndWait().ifPresent(response -> {
             if (response == ButtonType.OK) {
-                deleteSession(selectedSession.getSessionId());
+                if (isBatchDelete) {
+                    deleteSessions(selectedSessions);
+                } else {
+                    deleteSession(selectedSessions.get(0).getSessionId());
+                }
             }
         });
     }
     
     /**
-     * 删除指定的监控会话
+     * 更新删除按钮的状态和文本
+     */
+    private void updateDeleteButtonState() {
+        int selectedCount = sessionTable.getSelectionModel().getSelectedItems().size();
+        if (selectedCount == 0) {
+            deleteSessionButton.setDisable(true);
+            deleteSessionButton.setText("删除会话");
+        } else if (selectedCount == 1) {
+            deleteSessionButton.setDisable(false);
+            deleteSessionButton.setText("删除会话");
+        } else {
+            deleteSessionButton.setDisable(false);
+            deleteSessionButton.setText(String.format("批量删除 (%d)", selectedCount));
+        }
+    }
+    
+    /**
+     * 批量删除指定的监控会话
+     * 
+     * @param selectedSessions 选中的会话列表
+     */
+    private void deleteSessions(ObservableList<SessionDisplay> selectedSessions) {
+        // 提取会话 ID 列表
+        List<Integer> sessionIds = selectedSessions.stream()
+                .map(SessionDisplay::getSessionId)
+                .collect(java.util.stream.Collectors.toList());
+        
+        int totalCount = sessionIds.size();
+        
+        // 禁用删除按钮，防止重复点击
+        deleteSessionButton.setDisable(true);
+        statusLabel.setText(String.format("正在删除 %d 个会话...", totalCount));
+        
+        databaseService.deleteSessions(sessionIds)
+            .thenAccept(deletedCount -> {
+                Platform.runLater(() -> {
+                    if (deletedCount > 0) {
+                        // 删除成功，从列表中移除已删除的会话
+                        sessionData.removeAll(selectedSessions);
+                        statusLabel.setText(String.format("成功删除 %d 个会话", deletedCount));
+                        
+                        // 清空会话详情显示
+                        sessionDetailTextArea.setText("");
+                        
+                        // 如果当前查看的是已删除会话的详细记录，清空详细记录表格
+                        if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
+                            historyData.clear();
+                        }
+                        
+                        // 清除选择
+                        sessionTable.getSelectionModel().clearSelection();
+                    } else {
+                        statusLabel.setText("删除失败：没有会话被删除");
+                        showAlert(Alert.AlertType.ERROR, "删除失败", 
+                                "没有会话被删除，请检查会话是否仍然存在。");
+                    }
+                    
+                    // 恢复删除按钮状态
+                    updateDeleteButtonState();
+                });
+            })
+            .exceptionally(e -> {
+                Platform.runLater(() -> {
+                    statusLabel.setText("批量删除失败: " + e.getMessage());
+                    showAlert(Alert.AlertType.ERROR, "批量删除失败", 
+                            "删除会话时发生错误：\n" + e.getMessage());
+                    
+                    // 恢复删除按钮状态
+                    updateDeleteButtonState();
+                });
+                return null;
+            });
+    }
+    
+    /**
+     * 删除指定的监控会话（单个删除）
      * 
      * @param sessionId 会话 ID
      */
@@ -619,9 +735,8 @@ public class HistoryController {
                                 String.format("会话 #%d 不存在或已被删除。", sessionId));
                     }
                     
-                    // 恢复删除按钮状态（根据当前选择）
-                    SessionDisplay selected = sessionTable.getSelectionModel().getSelectedItem();
-                    deleteSessionButton.setDisable(selected == null);
+                    // 恢复删除按钮状态
+                    updateDeleteButtonState();
                 });
             })
             .exceptionally(e -> {
@@ -631,8 +746,7 @@ public class HistoryController {
                             "删除会话时发生错误：\n" + e.getMessage());
                     
                     // 恢复删除按钮状态
-                    SessionDisplay selected = sessionTable.getSelectionModel().getSelectedItem();
-                    deleteSessionButton.setDisable(selected == null);
+                    updateDeleteButtonState();
                 });
                 return null;
             });

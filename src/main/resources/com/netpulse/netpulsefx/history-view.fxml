@@ -111,9 +111,6 @@
                 <!-- ID 列 -->
                 <TableColumn fx:id="idColumn" text="ID" prefWidth="60.0" />
                 
-                <!-- 网卡名称列 -->
-                <TableColumn fx:id="ifaceNameColumn" text="网卡名称" prefWidth="150.0" />
-                
                 <!-- 下行速度列 -->
                 <TableColumn fx:id="downSpeedColumn" text="下行速度 (KB/s)" prefWidth="130.0" />
                 

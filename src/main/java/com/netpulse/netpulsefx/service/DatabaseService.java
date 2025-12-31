@@ -2,7 +2,9 @@ package com.netpulse.netpulsefx.service;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -774,14 +776,289 @@ public class DatabaseService {
             try (PreparedStatement pstmt = connection.prepareStatement(deleteSQL)) {
                 pstmt.setInt(1, sessionId);
                 int rowsAffected = pstmt.executeUpdate();
-                connection.commit();
                 
                 if (rowsAffected > 0) {
                     System.out.println("[DatabaseService] 会话已删除: session_id=" + sessionId);
+                    
+                    // 删除后重新分配ID
+                    reorderSessionIds();
+                    
+                    connection.commit();
                     return true;
                 } else {
+                    connection.commit();
                     return false;
                 }
+            }
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+    
+    /**
+     * 重新分配会话ID，按照开始时间排序，从1开始连续编号
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>禁用外键约束</li>
+     *   <li>查询所有会话，按开始时间排序</li>
+     *   <li>创建旧ID到新ID的映射（1, 2, 3...）</li>
+     *   <li>更新 traffic_records 表中的 session_id</li>
+     *   <li>删除并重新插入 monitoring_sessions 表（使用新ID）</li>
+     *   <li>重新启用外键约束</li>
+     *   <li>重置 AUTO_INCREMENT 序列</li>
+     * </ol>
+     * 
+     * @throws SQLException 如果数据库操作失败
+     */
+    private void reorderSessionIds() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("数据库连接未初始化或已关闭");
+        }
+        
+        try {
+            // 1. 禁用外键约束（H2数据库）
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            }
+            
+            // 2. 查询所有会话，按开始时间排序
+            String selectSQL = """
+                SELECT session_id, iface_name, start_time, end_time, duration_seconds,
+                       avg_down_speed, avg_up_speed, max_down_speed, max_up_speed,
+                       total_down_bytes, total_up_bytes, record_count
+                FROM %s
+                ORDER BY start_time ASC
+                """.formatted(TABLE_MONITORING_SESSIONS);
+            
+            List<MonitoringSession> sessions = new ArrayList<>();
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery(selectSQL)) {
+                while (rs.next()) {
+                    MonitoringSession session = new MonitoringSession(
+                        rs.getInt("session_id"),
+                        rs.getString("iface_name"),
+                        rs.getTimestamp("start_time"),
+                        rs.getTimestamp("end_time"),
+                        rs.getLong("duration_seconds"),
+                        rs.getDouble("avg_down_speed"),
+                        rs.getDouble("avg_up_speed"),
+                        rs.getDouble("max_down_speed"),
+                        rs.getDouble("max_up_speed"),
+                        rs.getLong("total_down_bytes"),
+                        rs.getLong("total_up_bytes"),
+                        rs.getInt("record_count")
+                    );
+                    sessions.add(session);
+                }
+            }
+            
+            // 如果没有会话，只重置 AUTO_INCREMENT
+            if (sessions.isEmpty()) {
+                try (Statement stmt = connection.createStatement()) {
+                    stmt.execute("ALTER TABLE " + TABLE_MONITORING_SESSIONS + " ALTER COLUMN session_id RESTART WITH 1");
+                }
+                try (Statement stmt = connection.createStatement()) {
+                    stmt.execute("SET REFERENTIAL_INTEGRITY TRUE");
+                }
+                return;
+            }
+            
+            // 3. 创建旧ID到新ID的映射（按顺序：1, 2, 3...）
+            Map<Integer, Integer> idMapping = new HashMap<>();
+            for (int i = 0; i < sessions.size(); i++) {
+                int oldId = sessions.get(i).getSessionId();
+                int newId = i + 1;
+                if (oldId != newId) {
+                    idMapping.put(oldId, newId);
+                }
+            }
+            
+            // 如果没有需要更新的ID，直接返回
+            if (idMapping.isEmpty()) {
+                try (Statement stmt = connection.createStatement()) {
+                    stmt.execute("SET REFERENTIAL_INTEGRITY TRUE");
+                }
+                return;
+            }
+            
+            // 4. 更新 traffic_records 表中的 session_id
+            for (Map.Entry<Integer, Integer> entry : idMapping.entrySet()) {
+                int oldId = entry.getKey();
+                int newId = entry.getValue();
+                
+                String updateTrafficSQL = """
+                    UPDATE %s SET session_id = ? WHERE session_id = ?
+                    """.formatted(TABLE_TRAFFIC_RECORDS);
+                
+                try (PreparedStatement pstmt = connection.prepareStatement(updateTrafficSQL)) {
+                    pstmt.setInt(1, newId);
+                    pstmt.setInt(2, oldId);
+                    pstmt.executeUpdate();
+                }
+            }
+            
+            // 5. 删除所有 monitoring_sessions 记录，然后重新插入（使用新ID）
+            // 先保存数据到临时列表
+            List<MonitoringSession> sessionsToReinsert = new ArrayList<>();
+            for (int i = 0; i < sessions.size(); i++) {
+                MonitoringSession oldSession = sessions.get(i);
+                int newId = i + 1;
+                // 创建新会话对象，使用新ID
+                MonitoringSession newSession = new MonitoringSession(
+                    newId,
+                    oldSession.getIfaceName(),
+                    oldSession.getStartTime(),
+                    oldSession.getEndTime(),
+                    oldSession.getDurationSeconds(),
+                    oldSession.getAvgDownSpeed(),
+                    oldSession.getAvgUpSpeed(),
+                    oldSession.getMaxDownSpeed(),
+                    oldSession.getMaxUpSpeed(),
+                    oldSession.getTotalDownBytes(),
+                    oldSession.getTotalUpBytes(),
+                    oldSession.getRecordCount()
+                );
+                sessionsToReinsert.add(newSession);
+            }
+            
+            // 删除所有记录
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("DELETE FROM " + TABLE_MONITORING_SESSIONS);
+            }
+            
+            // 重新插入，使用新ID
+            String insertSQL = """
+                INSERT INTO %s (session_id, iface_name, start_time, end_time, duration_seconds,
+                               avg_down_speed, avg_up_speed, max_down_speed, max_up_speed,
+                               total_down_bytes, total_up_bytes, record_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.formatted(TABLE_MONITORING_SESSIONS);
+            
+            try (PreparedStatement pstmt = connection.prepareStatement(insertSQL)) {
+                for (MonitoringSession session : sessionsToReinsert) {
+                    pstmt.setInt(1, session.getSessionId());
+                    pstmt.setString(2, session.getIfaceName());
+                    pstmt.setTimestamp(3, session.getStartTime());
+                    pstmt.setTimestamp(4, session.getEndTime());
+                    pstmt.setLong(5, session.getDurationSeconds());
+                    pstmt.setDouble(6, session.getAvgDownSpeed());
+                    pstmt.setDouble(7, session.getAvgUpSpeed());
+                    pstmt.setDouble(8, session.getMaxDownSpeed());
+                    pstmt.setDouble(9, session.getMaxUpSpeed());
+                    pstmt.setLong(10, session.getTotalDownBytes());
+                    pstmt.setLong(11, session.getTotalUpBytes());
+                    pstmt.setInt(12, session.getRecordCount());
+                    pstmt.addBatch();
+                }
+                pstmt.executeBatch();
+            }
+            
+            // 6. 重置 AUTO_INCREMENT 序列
+            int nextId = sessions.size() + 1;
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("ALTER TABLE " + TABLE_MONITORING_SESSIONS + " ALTER COLUMN session_id RESTART WITH " + nextId);
+            }
+            
+            // 7. 重新启用外键约束
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SET REFERENTIAL_INTEGRITY TRUE");
+            }
+            
+            System.out.println("[DatabaseService] 会话ID已重新分配，共 " + sessions.size() + " 个会话，ID范围：1-" + sessions.size());
+            
+        } catch (SQLException e) {
+            // 确保重新启用外键约束
+            try {
+                try (Statement stmt = connection.createStatement()) {
+                    stmt.execute("SET REFERENTIAL_INTEGRITY TRUE");
+                }
+            } catch (SQLException e2) {
+                // 忽略此错误
+            }
+            throw e;
+        }
+    }
+    
+    /**
+     * 批量删除指定的监控会话及其所有明细记录
+     * 
+     * <p>由于外键约束设置了 ON DELETE CASCADE，删除会话时会自动删除所有关联的明细记录。</p>
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>开启事务</li>
+     *   <li>批量删除会话记录（级联删除明细记录）</li>
+     *   <li>提交事务</li>
+     * </ol>
+     * 
+     * @param sessionIds 会话 ID 列表
+     * @return CompletableFuture<Integer> 异步操作结果，返回成功删除的会话数量
+     */
+    public CompletableFuture<Integer> deleteSessions(List<Integer> sessionIds) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return deleteSessionsSync(sessionIds);
+            } catch (SQLException e) {
+                throw new RuntimeException("批量删除监控会话失败: " + e.getMessage(), e);
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 同步批量删除会话（内部方法）
+     * 
+     * @param sessionIds 会话 ID 列表
+     * @return 成功删除的会话数量
+     * @throws SQLException 如果数据库操作失败
+     */
+    private int deleteSessionsSync(List<Integer> sessionIds) throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("数据库连接未初始化或已关闭");
+        }
+        
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return 0;
+        }
+        
+        // 开启事务
+        connection.setAutoCommit(false);
+        
+        try {
+            // 构建批量删除 SQL（使用 IN 子句）
+            StringBuilder deleteSQL = new StringBuilder("DELETE FROM ");
+            deleteSQL.append(TABLE_MONITORING_SESSIONS);
+            deleteSQL.append(" WHERE session_id IN (");
+            
+            // 构建占位符 (?, ?, ?, ...)
+            for (int i = 0; i < sessionIds.size(); i++) {
+                if (i > 0) {
+                    deleteSQL.append(", ");
+                }
+                deleteSQL.append("?");
+            }
+            deleteSQL.append(")");
+            
+            try (PreparedStatement pstmt = connection.prepareStatement(deleteSQL.toString())) {
+                // 设置参数
+                for (int i = 0; i < sessionIds.size(); i++) {
+                    pstmt.setInt(i + 1, sessionIds.get(i));
+                }
+                
+                int rowsAffected = pstmt.executeUpdate();
+                
+                if (rowsAffected > 0) {
+                    // 删除后重新分配ID
+                    reorderSessionIds();
+                }
+                
+                connection.commit();
+                
+                System.out.println("[DatabaseService] 批量删除会话: 删除 " + rowsAffected + " 个会话");
+                return rowsAffected;
             }
         } catch (SQLException e) {
             connection.rollback();
