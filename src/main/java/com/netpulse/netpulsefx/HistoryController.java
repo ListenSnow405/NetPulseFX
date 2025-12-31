@@ -27,6 +27,10 @@ import javafx.stage.Stage;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
 
 /**
  * 历史数据查看窗口控制器
@@ -204,6 +208,9 @@ public class HistoryController {
     /** 当前正在查看的会话ID（如果正在查看详细记录） */
     private Integer currentViewingSessionId;
     
+    /** 当前正在加载的会话ID（用于防抖处理，取消之前的任务） */
+    private final AtomicReference<Integer> currentLoadingSessionId = new AtomicReference<>(null);
+    
     /** 时间格式化器 */
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     
@@ -285,13 +292,40 @@ public class HistoryController {
         // 设置会话列表表格为多选模式
         sessionTable.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
         
-        // 设置会话列表表格行选择监听器
+        // ========== 核心优化：选中会话即自动加载详细记录 ==========
+        // 为会话列表的 selectedItemProperty 注册 ChangeListener
+        // 当用户选中某一行时，自动加载并显示对应的明细记录
+        sessionTable.getSelectionModel().selectedItemProperty().addListener(
+            new ChangeListener<SessionDisplay>() {
+                @Override
+                public void changed(ObservableValue<? extends SessionDisplay> observable, 
+                                  SessionDisplay oldValue, SessionDisplay newValue) {
+                    // 当选中项发生变化时触发
+                    if (newValue != null) {
+                        // 有选中项：自动加载详细记录
+                        onSessionSelectedAutoLoad(newValue);
+                    } else {
+                        // 没有选中项：清空详细记录表格
+                        Platform.runLater(() -> {
+                            historyData.clear();
+                            currentViewingSessionId = null;
+                            // 如果当前在详细记录标签页，显示提示信息
+                            if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
+                                statusLabel.setText("请选择一个会话查看详细记录");
+                            }
+                        });
+                    }
+                }
+            }
+        );
+        
+        // 保留原有的多选监听器（用于更新删除按钮状态和会话详情文本）
         sessionTable.getSelectionModel().getSelectedItems().addListener(
             (ListChangeListener.Change<? extends SessionDisplay> change) -> {
                 // 当选择发生变化时更新 UI
                 updateDeleteButtonState();
                 
-                // 如果有选中项，显示第一个选中项的详情
+                // 如果有选中项，显示第一个选中项的详情（文本形式）
                 if (!sessionTable.getSelectionModel().getSelectedItems().isEmpty()) {
                     SessionDisplay firstSelected = sessionTable.getSelectionModel().getSelectedItems().get(0);
                     onSessionRowSelected(firstSelected);
@@ -331,17 +365,34 @@ public class HistoryController {
     }
     
     /**
-     * 查看会话详细记录按钮点击事件
+     * 查看会话详细记录按钮点击事件（可选功能）
+     * 
+     * <p>注意：由于已实现"选中即加载"功能，此按钮现在作为可选功能保留。
+     * 如果用户想要手动触发加载，可以点击此按钮。</p>
+     * 
+     * <p>功能说明：</p>
+     * <ul>
+     *   <li>如果当前没有选中会话，提示用户先选择</li>
+     *   <li>如果已选中会话，切换到详细记录标签页并加载数据</li>
+     *   <li>此方法会调用 onSessionSelectedAutoLoad，确保行为一致</li>
+     * </ul>
      */
     @FXML
     protected void onViewSessionDetailsClick() {
         SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
-        if (selectedSession != null) {
-            // 切换到详细记录标签页
-            mainTabPane.getSelectionModel().select(1);
-            // 加载该会话的详细记录
-            loadSessionDetails(selectedSession.getSessionId());
+        if (selectedSession == null) {
+            showAlert(Alert.AlertType.WARNING, "未选择会话", 
+                "请先在会话列表中选择一个会话。\n\n提示：选中会话后，系统会自动加载详细记录。");
+            return;
         }
+        
+        // 调用自动加载方法（确保行为一致）
+        onSessionSelectedAutoLoad(selectedSession);
+        
+        // 确保切换到详细记录标签页
+        Platform.runLater(() -> {
+            mainTabPane.getSelectionModel().select(1);
+        });
     }
     
     /**
@@ -1038,7 +1089,10 @@ public class HistoryController {
     }
     
     /**
-     * 会话行选择事件处理
+     * 会话行选择事件处理（仅更新会话详情文本区域）
+     * 此方法用于在右侧会话详情区域显示会话的基本信息
+     * 
+     * @param selectedSession 选中的会话对象
      */
     private void onSessionRowSelected(SessionDisplay selectedSession) {
         StringBuilder detail = new StringBuilder();
@@ -1055,6 +1109,127 @@ public class HistoryController {
         detail.append("记录数量: ").append(selectedSession.getRecordCount()).append(" 条\n");
         
         sessionDetailTextArea.setText(detail.toString());
+    }
+    
+    /**
+     * 会话选中时自动加载详细记录（核心优化方法）
+     * 
+     * <p>功能说明：</p>
+     * <ul>
+     *   <li>当用户在会话列表 TableView 中选中某一行时，自动触发此方法</li>
+     *   <li>异步加载该会话的所有明细记录，并更新到详细记录表格中</li>
+     *   <li>实现防抖处理：如果用户快速连续选择多行，只显示最后一次选中的结果</li>
+     *   <li>自动切换到详细记录标签页，方便用户查看</li>
+     * </ul>
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>取消之前的加载任务（防抖处理）</li>
+     *   <li>获取选中会话的 sessionId</li>
+     *   <li>创建异步任务调用 DatabaseService.getRecordsBySession()</li>
+     *   <li>使用 Platform.runLater() 更新 UI（详细记录表格）</li>
+     *   <li>自动切换到详细记录标签页</li>
+     * </ol>
+     * 
+     * @param selectedSession 选中的会话对象
+     */
+    private void onSessionSelectedAutoLoad(SessionDisplay selectedSession) {
+        if (selectedSession == null) {
+            return;
+        }
+        
+        int sessionId = selectedSession.getSessionId();
+        
+        // ========== 防抖处理：标记之前的加载任务为已取消 ==========
+        // 如果用户快速连续点击多行，确保只显示最后一次选中的结果
+        Integer previousSessionId = currentLoadingSessionId.getAndSet(sessionId);
+        if (previousSessionId != null && previousSessionId != sessionId) {
+            // 标记之前的任务为已取消（通过比较sessionId，让之前的任务忽略结果）
+            System.out.println("[HistoryController] 取消之前的加载任务（会话 #" + previousSessionId + "），加载新的会话: " + sessionId);
+        }
+        
+        // ========== 显示加载状态 ==========
+        Platform.runLater(() -> {
+            // 在详细记录表格中显示加载提示
+            historyData.clear();
+            statusLabel.setText(String.format("正在加载会话 #%d 的详细记录...", sessionId));
+            
+            // 自动切换到详细记录标签页（如果当前不在该标签页）
+            if (mainTabPane.getSelectionModel().getSelectedIndex() != 1) {
+                mainTabPane.getSelectionModel().select(1);
+            }
+        });
+        
+        // ========== 异步加载详细记录 ==========
+        // 使用 CompletableFuture 异步调用数据库服务
+        // 使用 sessionId 作为唯一标识符进行防抖检查，避免变量初始化问题
+        final int finalSessionId = sessionId; // 用于lambda表达式的final变量
+        databaseService.getRecordsBySession(sessionId)
+            .thenAccept(records -> {
+                // 在主线程中更新 UI
+                Platform.runLater(() -> {
+                    // 检查任务是否已被新的任务替换（防抖处理）
+                    // 通过比较 sessionId 来判断，而不是比较 CompletableFuture 对象
+                    if (currentLoadingSessionId.get() != finalSessionId) {
+                        // 此任务已被新任务替换，忽略结果
+                        System.out.println("[HistoryController] 忽略已取消的加载任务结果: sessionId=" + finalSessionId);
+                        return;
+                    }
+                    
+                    // 清空旧数据
+                    historyData.clear();
+                    
+                    // 转换并添加数据，ID从1开始重新编号
+                    int displayId = 1;
+                    for (DatabaseService.TrafficRecord record : records) {
+                        TrafficRecordDisplay display = new TrafficRecordDisplay(
+                            (long) displayId,  // 使用重新编号的ID
+                            record.getIfaceName(),
+                            record.getDownSpeed(),
+                            record.getUpSpeed(),
+                            record.getSourceIp(),
+                            record.getDestIp(),
+                            record.getProcessName(),
+                            formatTimestamp(record.getRecordTime())
+                        );
+                        historyData.add(display);
+                        displayId++;
+                    }
+                    
+                    // 更新状态标签
+                    statusLabel.setText(String.format("会话 #%d 共 %d 条记录", finalSessionId, records.size()));
+                    
+                    // 记录当前查看的会话ID
+                    currentViewingSessionId = finalSessionId;
+                    
+                    System.out.println("[HistoryController] 成功加载会话 #" + finalSessionId + " 的详细记录，共 " + records.size() + " 条");
+                });
+            })
+            .exceptionally(throwable -> {
+                // 处理加载失败的情况
+                Platform.runLater(() -> {
+                    // 检查任务是否已被新的任务替换（防抖处理）
+                    // 通过比较 sessionId 来判断，而不是比较 CompletableFuture 对象
+                    if (currentLoadingSessionId.get() != finalSessionId) {
+                        // 此任务已被新任务替换，忽略错误
+                        return; // Platform.runLater 接受 Runnable，不能返回值
+                    }
+                    
+                    String errorMsg = throwable.getMessage() != null ? throwable.getMessage() : "未知错误";
+                    statusLabel.setText("加载详细记录失败: " + errorMsg);
+                    historyData.clear();
+                    
+                    // 显示错误提示
+                    showAlert(Alert.AlertType.ERROR, "加载失败", 
+                        String.format("无法加载会话 #%d 的详细记录：\n%s", finalSessionId, errorMsg));
+                    
+                    System.err.println("[HistoryController] 加载会话 #" + finalSessionId + " 的详细记录失败: " + errorMsg);
+                    throwable.printStackTrace();
+                });
+                return null; // exceptionally 需要返回 Void 类型
+            });
+        
+        // 注意：currentLoadingSessionId 已在方法开始时设置，用于防抖检查
     }
     
     /**
