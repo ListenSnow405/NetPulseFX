@@ -1,0 +1,322 @@
+/* NetPulse FX 历史记录页面样式表 */
+
+/* ========== 表格样式 ========== */
+.table-view {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #e0e0e0;
+    -fx-border-width: 1px;
+}
+
+/* 表格选中行样式 */
+.table-view .table-row-cell:selected {
+    -fx-background-color: #4a90e2;
+    -fx-background-insets: 0;
+}
+
+.table-view .table-row-cell:selected .text {
+    -fx-fill: #ffffff;
+}
+
+/* 表格行悬停效果 */
+.table-view .table-row-cell:hover {
+    -fx-background-color: #e8f4f8;
+}
+
+.table-view .table-row-cell:selected:hover {
+    -fx-background-color: #3a7bc8;
+}
+
+/* 表格列标题样式 */
+.table-view .column-header {
+    -fx-background-color: #f5f5f5;
+    -fx-border-color: #e0e0e0;
+    -fx-border-width: 0 1 1 0;
+    -fx-padding: 8px;
+}
+
+.table-view .column-header .label {
+    -fx-font-weight: bold;
+    -fx-text-fill: #333333;
+}
+
+/* ========== 按钮样式 ========== */
+
+/* 基础按钮样式 */
+.button {
+    -fx-padding: 8px 16px;
+    -fx-background-radius: 6px;
+    -fx-border-radius: 6px;
+    -fx-font-size: 13px;
+    -fx-font-weight: 500;
+    -fx-cursor: hand;
+    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.1), 2, 0, 0, 1);
+}
+
+/* 按钮悬停效果 */
+.button:hover {
+    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 4, 0, 0, 2);
+    -fx-scale-x: 1.02;
+    -fx-scale-y: 1.02;
+}
+
+.button:pressed {
+    -fx-scale-x: 0.98;
+    -fx-scale-y: 0.98;
+}
+
+/* AI 诊断按钮 - 科技感蓝色 */
+#aiDiagnosisButton {
+    -fx-background-color: #4a90e2;
+    -fx-text-fill: #ffffff;
+}
+
+#aiDiagnosisButton:hover {
+    -fx-background-color: #3a7bc8;
+}
+
+#aiDiagnosisButton:pressed {
+    -fx-background-color: #2a6bb0;
+}
+
+#aiDiagnosisButton:disabled {
+    -fx-background-color: #b0c4de;
+    -fx-text-fill: #808080;
+}
+
+/* 导出 Excel 按钮 - 绿色基调 */
+#exportExcelButton {
+    -fx-background-color: #28a745;
+    -fx-text-fill: #ffffff;
+}
+
+#exportExcelButton:hover {
+    -fx-background-color: #218838;
+}
+
+#exportExcelButton:pressed {
+    -fx-background-color: #1e7e34;
+}
+
+#exportExcelButton:disabled {
+    -fx-background-color: #a0c4a0;
+    -fx-text-fill: #808080;
+}
+
+/* 导出 PDF 按钮 - 红色基调 */
+#exportPDFButton {
+    -fx-background-color: #dc3545;
+    -fx-text-fill: #ffffff;
+}
+
+#exportPDFButton:hover {
+    -fx-background-color: #c82333;
+}
+
+#exportPDFButton:pressed {
+    -fx-background-color: #bd2130;
+}
+
+#exportPDFButton:disabled {
+    -fx-background-color: #d4a5a5;
+    -fx-text-fill: #808080;
+}
+
+/* 删除会话按钮 - 浅红色/粉色 */
+#deleteSessionButton {
+    -fx-background-color: #ff6b6b;
+    -fx-text-fill: #ffffff;
+}
+
+#deleteSessionButton:hover {
+    -fx-background-color: #ff5252;
+}
+
+#deleteSessionButton:pressed {
+    -fx-background-color: #ff3838;
+}
+
+#deleteSessionButton:disabled {
+    -fx-background-color: #ffb3b3;
+    -fx-text-fill: #808080;
+}
+
+/* 取消 AI 诊断按钮 */
+#cancelAIDiagnosisButton {
+    -fx-background-color: #ff9800;
+    -fx-text-fill: #ffffff;
+}
+
+#cancelAIDiagnosisButton:hover {
+    -fx-background-color: #e68900;
+}
+
+#cancelAIDiagnosisButton:pressed {
+    -fx-background-color: #cc7a00;
+}
+
+/* 刷新和关闭按钮 */
+#refreshButton, #closeButton {
+    -fx-background-color: #6c757d;
+    -fx-text-fill: #ffffff;
+}
+
+#refreshButton:hover, #closeButton:hover {
+    -fx-background-color: #5a6268;
+}
+
+#refreshButton:pressed, #closeButton:pressed {
+    -fx-background-color: #484f55;
+}
+
+/* IP 查询按钮 */
+#queryIpButton {
+    -fx-background-color: #17a2b8;
+    -fx-text-fill: #ffffff;
+}
+
+#queryIpButton:hover {
+    -fx-background-color: #138496;
+}
+
+#queryIpButton:pressed {
+    -fx-background-color: #117a8b;
+}
+
+/* ========== 详情区样式 ========== */
+
+/* 详情区容器 */
+.detail-container {
+    -fx-background-color: #f8f9fa;
+    -fx-padding: 15px;
+    -fx-spacing: 10px;
+}
+
+/* 详情区标题 */
+.detail-title {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2c3e50;
+}
+
+/* 数据卡片容器 */
+.data-card {
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 8px;
+    -fx-border-color: #e0e0e0;
+    -fx-border-radius: 8px;
+    -fx-border-width: 1px;
+    -fx-padding: 12px;
+    -fx-spacing: 8px;
+}
+
+/* 数据卡片标题 */
+.data-card-title {
+    -fx-font-size: 12px;
+    -fx-text-fill: #6c757d;
+    -fx-font-weight: normal;
+}
+
+/* 数据卡片值 */
+.data-card-value {
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1e3a8a;
+}
+
+/* 数据卡片单位 */
+.data-card-unit {
+    -fx-font-size: 12px;
+    -fx-text-fill: #6c757d;
+    -fx-font-weight: normal;
+}
+
+/* 数据卡片网格布局 */
+.data-card-grid {
+    -fx-hgap: 10px;
+    -fx-vgap: 10px;
+}
+
+/* ========== 标签样式 ========== */
+.label {
+    -fx-font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+/* 状态标签 */
+#statusLabel {
+    -fx-font-size: 12px;
+    -fx-text-fill: #6c757d;
+}
+
+/* IP 查询状态标签 */
+#ipQueryStatusLabel {
+    -fx-font-size: 11px;
+    -fx-text-fill: #6c757d;
+}
+
+/* ========== 文本区域样式 ========== */
+.text-area {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #e0e0e0;
+    -fx-border-radius: 4px;
+    -fx-background-radius: 4px;
+    -fx-font-family: "Microsoft YaHei", "Consolas", monospace;
+    -fx-font-size: 12px;
+}
+
+.text-area .content {
+    -fx-background-color: #ffffff;
+}
+
+/* ========== WebView 容器样式 ========== */
+.web-view-container {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #e0e0e0;
+    -fx-border-radius: 4px;
+    -fx-background-radius: 4px;
+}
+
+/* ========== 进度指示器样式 ========== */
+.progress-indicator {
+    -fx-progress-color: #4a90e2;
+}
+
+/* ========== 标签页样式 ========== */
+.tab-pane {
+    -fx-tab-min-width: 120px;
+}
+
+.tab {
+    -fx-background-color: #f5f5f5;
+    -fx-background-radius: 4px 4px 0 0;
+    -fx-padding: 8px 16px;
+}
+
+.tab:selected {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #e0e0e0;
+    -fx-border-width: 1px 1px 0 1px;
+}
+
+.tab .tab-label {
+    -fx-font-size: 13px;
+    -fx-text-fill: #333333;
+}
+
+.tab:selected .tab-label {
+    -fx-text-fill: #4a90e2;
+    -fx-font-weight: bold;
+}
+
+/* ========== 分割面板样式 ========== */
+.split-pane {
+    -fx-background-color: #ffffff;
+}
+
+.split-pane-divider {
+    -fx-background-color: #e0e0e0;
+}
+
+.split-pane-divider:hover {
+    -fx-background-color: #4a90e2;
+}
+

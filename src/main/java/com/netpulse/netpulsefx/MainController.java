@@ -19,7 +19,16 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.TableCell;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.Region;
+import javafx.animation.TranslateTransition;
+import javafx.util.Duration;
+import javafx.geometry.Pos;
+import javafx.geometry.Insets;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
@@ -58,9 +67,9 @@ public class MainController {
     @FXML
     private Label titleLabel;
     
-    /** 网卡列表视图：显示所有可用的网络接口 */
+    /** 网卡下拉框：显示所有可用的网络接口 */
     @FXML
-    private ListView<String> networkInterfaceListView;
+    private ComboBox<PcapNetworkInterface> networkInterfaceComboBox;
     
     /** 查看历史数据按钮 */
     @FXML
@@ -68,7 +77,7 @@ public class MainController {
     
     /** 刷新网卡按钮 */
     @FXML
-    private Button refreshButton;
+    private Button refreshNICButton;
     
     /** 开始监控按钮 */
     @FXML
@@ -102,14 +111,42 @@ public class MainController {
     @FXML
     private TableColumn<ProcessTrafficModel, Double> processUploadSpeedColumn;
     
+    /** 概览看板：实时下行速度标签 */
+    @FXML
+    private Label realtimeDownLabel;
+    
+    /** 概览看板：实时上行速度标签 */
+    @FXML
+    private Label realtimeUpLabel;
+    
+    /** 概览看板：峰值速度标签 */
+    @FXML
+    private Label peakSpeedLabel;
+    
+    /** 概览看板：总流量标签 */
+    @FXML
+    private Label totalTrafficLabel;
+    
+    /** 状态栏：运行时间标签 */
+    @FXML
+    private Label uptimeLabel;
+    
+    /** 状态栏：AI 状态标签 */
+    @FXML
+    private Label aiStatusLabel;
+    
+    /** 状态栏：数据库状态标签 */
+    @FXML
+    private Label dbStatusLabel;
+    
     // ========== 数据模型 ==========
     
     /** 
      * 网卡列表的数据源
      * 使用 ObservableList 实现数据与视图的自动绑定
-     * 当列表数据发生变化时，ListView 会自动更新显示
+     * 当列表数据发生变化时，ComboBox 会自动更新显示
      */
-    private ObservableList<String> networkInterfaceList;
+    private ObservableList<PcapNetworkInterface> networkInterfaceList;
     
     /** 网卡服务对象：负责获取网卡信息 */
     private NetworkInterfaceService networkInterfaceService;
@@ -172,6 +209,20 @@ public class MainController {
     /** 进程流量临时统计：进程名 -> 流量数据（用于每秒汇总） */
     private java.util.Map<String, ProcessTrafficData> processTrafficTempMap;
     
+    // ========== 概览看板数据 ==========
+    
+    /** 峰值速度（KB/s） */
+    private double peakSpeed = 0.0;
+    
+    /** 总流量（MB） */
+    private double totalTrafficMB = 0.0;
+    
+    /** 应用启动时间 */
+    private long appStartTime;
+    
+    /** 运行时间更新任务的 Future */
+    private ScheduledFuture<?> uptimeUpdateFuture;
+    
     // ========== 初始化方法 ==========
     
     /**
@@ -183,8 +234,11 @@ public class MainController {
         // 初始化数据源：创建空的 ObservableList
         networkInterfaceList = FXCollections.observableArrayList();
         
-        // 将数据源绑定到 ListView
-        networkInterfaceListView.setItems(networkInterfaceList);
+        // 将数据源绑定到 ComboBox
+        networkInterfaceComboBox.setItems(networkInterfaceList);
+        
+        // 设置下拉列表的最大显示行数（约等于 400px 高度，每行约 50px）
+        networkInterfaceComboBox.setVisibleRowCount(8);
         
         // 初始化服务对象
         networkInterfaceService = new NetworkInterfaceService();
@@ -202,25 +256,139 @@ public class MainController {
         // 初始化进程流量监控
         initializeProcessTrafficMonitoring();
         
-        // 设置自定义的 CellFactory，用于格式化显示网卡信息
-        // 这样可以在 ListView 中显示更友好的网卡信息格式
-        networkInterfaceListView.setCellFactory(param -> new ListCell<String>() {
+        // 设置自定义的 CellFactory 和 ButtonCell，用于格式化显示网卡信息
+        setupComboBoxCellFactory();
+        
+        // 初始化概览看板
+        initializeOverviewCards();
+        
+        // 初始化状态栏
+        initializeStatusBar();
+        
+        // 初始化时自动刷新网卡列表
+        refreshNICs();
+    }
+    
+    /**
+     * 初始化概览看板
+     */
+    private void initializeOverviewCards() {
+        if (realtimeDownLabel != null) realtimeDownLabel.setText("0.00");
+        if (realtimeUpLabel != null) realtimeUpLabel.setText("0.00");
+        if (peakSpeedLabel != null) peakSpeedLabel.setText("0.00");
+        if (totalTrafficLabel != null) totalTrafficLabel.setText("0.00");
+        
+        peakSpeed = 0.0;
+        totalTrafficMB = 0.0;
+    }
+    
+    /**
+     * 初始化状态栏
+     */
+    private void initializeStatusBar() {
+        appStartTime = System.currentTimeMillis();
+        
+        // 更新运行时间（每秒更新一次）
+        uptimeUpdateFuture = scheduler.scheduleAtFixedRate(
+            this::updateUptime,
+            1,
+            1,
+            TimeUnit.SECONDS
+        );
+        
+        // 初始化状态显示
+        if (uptimeLabel != null) uptimeLabel.setText("00:00:00");
+        if (aiStatusLabel != null) {
+            // 检查 AI 服务是否可用（这里简化处理，实际应该检查 AIService）
+            aiStatusLabel.setText("未连接");
+            aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+        }
+        if (dbStatusLabel != null) {
+            if (databaseService != null && databaseService.getConnection() != null) {
+                dbStatusLabel.setText("就绪");
+                dbStatusLabel.setStyle("-fx-text-fill: #28a745;");
+            } else {
+                dbStatusLabel.setText("未连接");
+                dbStatusLabel.setStyle("-fx-text-fill: #dc3545;");
+            }
+        }
+    }
+    
+    /**
+     * 更新运行时间显示
+     */
+    private void updateUptime() {
+        long elapsed = System.currentTimeMillis() - appStartTime;
+        long seconds = elapsed / 1000;
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+        
+        Platform.runLater(() -> {
+            if (uptimeLabel != null) {
+                uptimeLabel.setText(String.format("%02d:%02d:%02d", hours, minutes, secs));
+            }
+        });
+    }
+    
+    /**
+     * 设置 ComboBox 的自定义 CellFactory 和 ButtonCell
+     * 下拉列表中使用 HBox 布局显示网卡名称、IP 和 MAC 地址
+     * 选中后只显示网卡名称
+     */
+    private void setupComboBoxCellFactory() {
+        // 设置下拉列表中的单元格样式（ListCell）
+        networkInterfaceComboBox.setCellFactory(param -> new ListCell<PcapNetworkInterface>() {
             @Override
-            protected void updateItem(String item, boolean empty) {
+            protected void updateItem(PcapNetworkInterface item, boolean empty) {
                 super.updateItem(item, empty);
                 if (empty || item == null) {
                     setText(null);
+                    setGraphic(null);
                 } else {
-                    // 直接显示格式化后的网卡信息字符串
-                    setText(item);
-                    // 设置样式，使显示更清晰
-                    setStyle("-fx-font-size: 12px; -fx-padding: 5px;");
+                    // 获取网卡信息
+                    NetworkInterfaceService.NetworkInterfaceInfo info = 
+                            networkInterfaceService.getInterfaceInfo(item);
+                    
+                    // 创建 HBox 布局：左侧显示网卡名称（加粗），下方显示 IP 和 MAC 地址
+                    VBox container = new VBox(4);
+                    container.setStyle("-fx-padding: 4px;");
+                    
+                    // 网卡名称（加粗）
+                    Label nameLabel = new Label(info.getDescription());
+                    nameLabel.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: #2c3e50;");
+                    
+                    // IP 和 MAC 地址（小字）
+                    HBox detailsBox = new HBox(8);
+                    Label ipLabel = new Label("IP: " + info.getIpAddress());
+                    ipLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #4a90e2;");
+                    Label macLabel = new Label("MAC: " + info.getMacAddress());
+                    macLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #6c757d;");
+                    detailsBox.getChildren().addAll(ipLabel, macLabel);
+                    
+                    container.getChildren().addAll(nameLabel, detailsBox);
+                    setGraphic(container);
                 }
             }
         });
         
-        // 初始化时自动刷新网卡列表
-        refreshNICs();
+        // 设置选中后显示区域的单元格样式（ButtonCell）
+        // 只显示网卡名称，避免一行太挤
+        networkInterfaceComboBox.setButtonCell(new ListCell<PcapNetworkInterface>() {
+            @Override
+            protected void updateItem(PcapNetworkInterface item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                } else {
+                    // 只显示网卡描述（核心信息）
+                    NetworkInterfaceService.NetworkInterfaceInfo info = 
+                            networkInterfaceService.getInterfaceInfo(item);
+                    setText(info.getDescription());
+                    setStyle("-fx-font-size: 13px;");
+                }
+            }
+        });
     }
     
     /**
@@ -266,57 +434,11 @@ public class MainController {
         processDownloadSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("downloadSpeed"));
         processUploadSpeedColumn.setCellValueFactory(new PropertyValueFactory<>("uploadSpeed"));
         
-        // 设置下载速度列的格式化显示
-        processDownloadSpeedColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, Double>() {
-            @Override
-            protected void updateItem(Double item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                    setStyle("");
-                } else {
-                    ProcessTrafficModel model = getTableView().getItems().get(getIndex());
-                    setText(model.getFormattedDownloadSpeed());
-                    
-                    // 根据流量大小设置背景颜色
-                    double totalSpeed = model.getTotalSpeed();
-                    if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
-                        // 高流量：浅红色背景
-                        setStyle("-fx-background-color: #ffcccc;");
-                    } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
-                        // 中等流量：浅黄色背景
-                        setStyle("-fx-background-color: #ffffcc;");
-                    } else {
-                        setStyle("");
-                    }
-                }
-            }
-        });
+        // 设置下载速度列的格式化显示（带进度条）
+        processDownloadSpeedColumn.setCellFactory(column -> new ProgressBarTableCell(true));
         
-        // 设置上传速度列的格式化显示
-        processUploadSpeedColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, Double>() {
-            @Override
-            protected void updateItem(Double item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                    setStyle("");
-                } else {
-                    ProcessTrafficModel model = getTableView().getItems().get(getIndex());
-                    setText(model.getFormattedUploadSpeed());
-                    
-                    // 根据流量大小设置背景颜色
-                    double totalSpeed = model.getTotalSpeed();
-                    if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
-                        setStyle("-fx-background-color: #ffcccc;");
-                    } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
-                        setStyle("-fx-background-color: #ffffcc;");
-                    } else {
-                        setStyle("");
-                    }
-                }
-            }
-        });
+        // 设置上传速度列的格式化显示（带进度条）
+        processUploadSpeedColumn.setCellFactory(column -> new ProgressBarTableCell(false));
         
         // 设置进程名称列的背景颜色（整行）
         processNameColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, String>() {
@@ -370,7 +492,10 @@ public class MainController {
             // 创建新窗口
             Stage historyStage = new Stage();
             historyStage.setTitle("流量历史数据");
-            historyStage.setScene(new Scene(fxmlLoader.load(), 800, 500));
+            historyStage.setScene(new Scene(fxmlLoader.load()));
+            
+            // 设置窗口默认最大化（全屏显示）
+            historyStage.setMaximized(true);
             
             // 设置窗口为模态窗口（可选，这里使用非模态，允许同时查看主窗口）
             // historyStage.initModality(Modality.APPLICATION_MODAL);
@@ -407,25 +532,45 @@ public class MainController {
      */
     @FXML
     protected void onStartMonitorButtonClick() {
-        // 获取当前选中的网卡项
-        String selectedItem = networkInterfaceListView.getSelectionModel().getSelectedItem();
+        // 获取当前选中的网卡对象
+        PcapNetworkInterface selectedInterface = networkInterfaceComboBox.getValue();
         
-        if (selectedItem == null) {
-            // 如果没有选中任何网卡，显示提示信息
+        if (selectedInterface == null) {
+            // 如果没有选中任何网卡，显示警告并添加视觉提示
             showAlert(Alert.AlertType.WARNING, "未选择网卡", 
                     "请先选择一个网卡后再开始监控！");
+            
+            // 添加红框警告效果
+            networkInterfaceComboBox.getStyleClass().add("error");
+            
+            // 添加震动效果
+            shakeComboBox();
+            
+            // 3秒后移除错误样式
+            new Thread(() -> {
+                try {
+                    Thread.sleep(3000);
+                    Platform.runLater(() -> {
+                        networkInterfaceComboBox.getStyleClass().remove("error");
+                    });
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+            
             return;
         }
+        
+        // 移除错误样式（如果存在）
+        networkInterfaceComboBox.getStyleClass().remove("error");
         
         // 如果已经在监控，先停止当前监控
         if (trafficMonitorTask != null && trafficMonitorTask.isMonitoringActive()) {
             stopMonitoring();
         }
         
-        // 根据选中的索引找到对应的 PcapNetworkInterface 对象
-        int selectedIndex = networkInterfaceListView.getSelectionModel().getSelectedIndex();
-        if (selectedIndex >= 0 && selectedIndex < pcapNetworkInterfaces.size()) {
-            PcapNetworkInterface selectedInterface = pcapNetworkInterfaces.get(selectedIndex);
+        // 直接使用选中的 PcapNetworkInterface 对象
+        if (selectedInterface != null) {
             
             try {
                 // 保存当前监控的网卡名称（用于数据库记录）
@@ -482,8 +627,8 @@ public class MainController {
                             // 更新UI状态
                             startMonitorButton.setDisable(true);
                             stopMonitorButton.setDisable(false);
-                            refreshButton.setDisable(true);
-                            networkInterfaceListView.setDisable(true);
+                            refreshNICButton.setDisable(true);
+                            networkInterfaceComboBox.setDisable(true);
                             
                             titleLabel.setText("正在监控：" + selectedInterface.getDescription());
                         });
@@ -537,6 +682,12 @@ public class MainController {
             processTrafficUpdateFuture = null;
         }
         
+        // 取消运行时间更新任务
+        if (uptimeUpdateFuture != null && !uptimeUpdateFuture.isCancelled()) {
+            uptimeUpdateFuture.cancel(false);
+            uptimeUpdateFuture = null;
+        }
+        
         // 停止抓包任务
         if (trafficMonitorTask != null) {
             trafficMonitorTask.stop();  // 关闭 Pcap 句柄，中断抓包循环
@@ -574,6 +725,11 @@ public class MainController {
             }
         });
         
+        // 重置概览看板
+        Platform.runLater(() -> {
+            initializeOverviewCards();
+        });
+        
         // 恢复UI状态
         Platform.runLater(this::resetMonitorButtons);
     }
@@ -584,11 +740,24 @@ public class MainController {
     private void resetMonitorButtons() {
         startMonitorButton.setDisable(false);
         stopMonitorButton.setDisable(true);
-        refreshButton.setDisable(false);
-        networkInterfaceListView.setDisable(false);
+        refreshNICButton.setDisable(false);
+        networkInterfaceComboBox.setDisable(false);
         titleLabel.setText("请选择监控网卡");
         currentMonitoringInterfaceName = null; // 清除当前监控的网卡名称
         currentSessionId = null; // 清除当前会话ID
+    }
+    
+    /**
+     * 震动 ComboBox 的动画效果
+     * 当用户未选择网卡就点击开始监控时触发
+     */
+    private void shakeComboBox() {
+        TranslateTransition shake = new TranslateTransition(Duration.millis(50), networkInterfaceComboBox);
+        shake.setFromX(0);
+        shake.setByX(10);
+        shake.setCycleCount(6);
+        shake.setAutoReverse(true);
+        shake.play();
     }
     
     /**
@@ -679,8 +848,34 @@ public class MainController {
                 });
             }
             
+            // 更新概览看板数据
+            double downSpeed = kbPerSecond / 2.0;  // 简化处理：平均分配
+            double upSpeed = kbPerSecond / 2.0;
+            
+            // 更新峰值速度
+            if (kbPerSecond > peakSpeed) {
+                peakSpeed = kbPerSecond;
+            }
+            
+            // 更新总流量（累加）
+            totalTrafficMB += kbPerSecond / 1024.0;  // KB/s 转换为 MB
+            
             // 使用 Platform.runLater() 确保 UI 更新在主线程执行
             Platform.runLater(() -> {
+                // 更新概览看板
+                if (realtimeDownLabel != null) {
+                    realtimeDownLabel.setText(String.format("%.2f", downSpeed));
+                }
+                if (realtimeUpLabel != null) {
+                    realtimeUpLabel.setText(String.format("%.2f", upSpeed));
+                }
+                if (peakSpeedLabel != null) {
+                    peakSpeedLabel.setText(String.format("%.2f", peakSpeed));
+                }
+                if (totalTrafficLabel != null) {
+                    totalTrafficLabel.setText(String.format("%.2f", totalTrafficMB));
+                }
+                
                 // 添加新的数据点
                 trafficSeries.getData().add(new XYChart.Data<>(timeLabel, kbPerSecond));
                 
@@ -718,11 +913,12 @@ public class MainController {
      */
     private void refreshNICs() {
         // 禁用按钮，防止重复点击
-        refreshButton.setDisable(true);
+        refreshNICButton.setDisable(true);
         startMonitorButton.setDisable(true);
         
         // 清空当前列表，显示加载状态
         networkInterfaceList.clear();
+        networkInterfaceComboBox.setValue(null); // 清空选中项
         titleLabel.setText("正在扫描网卡...");
         
         // 创建后台任务，在后台线程执行网卡扫描
@@ -748,31 +944,16 @@ public class MainController {
                         // 清空旧数据
                         networkInterfaceList.clear();
                         
-                        // 遍历网卡列表，格式化并添加到数据源
-                        for (PcapNetworkInterface nif : interfaces) {
-                            // 使用服务层的方法获取格式化的网卡信息
-                            NetworkInterfaceService.NetworkInterfaceInfo info = 
-                                    networkInterfaceService.getInterfaceInfo(nif);
-                            
-                            // 格式化显示字符串：显示描述、IP地址和MAC地址
-                            // 格式：描述 (IP: xxx, MAC: xxx)
-                            String displayText = String.format(
-                                    "%s (IP: %s, MAC: %s)",
-                                    info.getDescription(),
-                                    info.getIpAddress(),
-                                    info.getMacAddress()
-                            );
-                            
-                            // 添加到 ObservableList，ListView 会自动更新
-                            networkInterfaceList.add(displayText);
-                        }
+                        // 直接将 PcapNetworkInterface 对象添加到列表
+                        // ComboBox 会使用自定义的 CellFactory 来显示
+                        networkInterfaceList.addAll(interfaces);
                         
                         // 更新标题，显示找到的网卡数量
                         titleLabel.setText(String.format("请选择监控网卡（找到 %d 个）", 
                                 networkInterfaceList.size()));
                         
                         // 恢复按钮状态
-                        refreshButton.setDisable(false);
+                        refreshNICButton.setDisable(false);
                         startMonitorButton.setDisable(false);
                     });
                     
@@ -782,7 +963,7 @@ public class MainController {
                         showAlert(Alert.AlertType.ERROR, "刷新失败", 
                                 "刷新网卡列表时发生错误：\n" + e.getMessage());
                         titleLabel.setText("请选择监控网卡");
-                        refreshButton.setDisable(false);
+                        refreshNICButton.setDisable(false);
                         startMonitorButton.setDisable(false);
                     });
                 }
@@ -805,7 +986,7 @@ public class MainController {
                     
                     showAlert(Alert.AlertType.ERROR, "扫描失败", errorMessage);
                     titleLabel.setText("请选择监控网卡");
-                    refreshButton.setDisable(false);
+                    refreshNICButton.setDisable(false);
                     startMonitorButton.setDisable(false);
                 });
             }
@@ -958,6 +1139,86 @@ public class MainController {
         }
         
         return null;
+    }
+    
+    /**
+     * 带进度条的表格单元格
+     * 用于显示流量数值，背景显示进度条效果
+     */
+    private class ProgressBarTableCell extends TableCell<ProcessTrafficModel, Double> {
+        private final StackPane stackPane;
+        private final Region progressBar;
+        private final Label valueLabel;
+        private final boolean isDownload;
+        
+        public ProgressBarTableCell(boolean isDownload) {
+            this.isDownload = isDownload;
+            
+            // 创建进度条背景
+            progressBar = new Region();
+            progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff9800, #ffb74d); " +
+                                "-fx-background-radius: 3px;");
+            progressBar.setMaxHeight(Double.MAX_VALUE);
+            progressBar.setMaxWidth(Double.MAX_VALUE);
+            
+            // 创建数值标签
+            valueLabel = new Label();
+            valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #333333; -fx-font-weight: 500;");
+            valueLabel.setAlignment(Pos.CENTER_LEFT);
+            
+            // 创建堆叠面板
+            stackPane = new StackPane();
+            stackPane.setAlignment(Pos.CENTER_LEFT);
+            stackPane.setPadding(new Insets(4, 8, 4, 8));
+            stackPane.getChildren().addAll(progressBar, valueLabel);
+        }
+        
+        @Override
+        protected void updateItem(Double item, boolean empty) {
+            super.updateItem(item, empty);
+            
+            if (empty || item == null) {
+                setGraphic(null);
+                setText(null);
+            } else {
+                ProcessTrafficModel model = getTableView().getItems().get(getIndex());
+                if (model == null) {
+                    setGraphic(null);
+                    setText(null);
+                    return;
+                }
+                
+                // 获取当前值和总速度
+                double currentValue = isDownload ? model.getDownloadSpeed() : model.getUploadSpeed();
+                double totalSpeed = model.getTotalSpeed();
+                
+                // 计算进度条宽度（基于总速度，最大100%）
+                // 使用表格中最大流量作为基准（简化处理，使用固定阈值）
+                double maxSpeed = HIGH_TRAFFIC_THRESHOLD * 2; // 2 MB/s 作为最大值
+                double progress = Math.min(totalSpeed / maxSpeed, 1.0);
+                
+                // 设置进度条宽度
+                progressBar.prefWidthProperty().bind(stackPane.widthProperty().multiply(progress));
+                
+                // 设置文本
+                valueLabel.setText(isDownload ? model.getFormattedDownloadSpeed() : model.getFormattedUploadSpeed());
+                
+                // 根据流量大小调整进度条颜色
+                if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff5722, #ff8a65); " +
+                                        "-fx-background-radius: 3px;");
+                } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff9800, #ffb74d); " +
+                                        "-fx-background-radius: 3px;");
+                } else {
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ffcc80, #ffe0b2); " +
+                                        "-fx-background-radius: 3px;");
+                }
+                
+                setGraphic(stackPane);
+                setText(null);
+            }
+        }
     }
     
     /**

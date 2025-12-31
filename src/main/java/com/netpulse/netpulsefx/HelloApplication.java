@@ -80,9 +80,13 @@ public class HelloApplication extends Application {
         
         // 加载主界面 FXML 文件
         FXMLLoader fxmlLoader = new FXMLLoader(HelloApplication.class.getResource("main-view.fxml"));
-        Scene scene = new Scene(fxmlLoader.load(), 600, 500);
+        Scene scene = new Scene(fxmlLoader.load());
         stage.setTitle("NetPulse FX - 网络流量监控系统");
         stage.setScene(scene);
+        
+        // 设置窗口默认最大化（全屏显示）
+        stage.setMaximized(true);
+        
         stage.show();
     }
     

@@ -4,6 +4,7 @@ import com.netpulse.netpulsefx.model.AIConfig;
 import com.netpulse.netpulsefx.model.IPLocationInfo;
 import com.netpulse.netpulsefx.service.AIService;
 import com.netpulse.netpulsefx.service.DatabaseService;
+import com.netpulse.netpulsefx.service.ExportService;
 import com.netpulse.netpulsefx.service.IPLocationService;
 import com.netpulse.netpulsefx.util.MarkdownToHtmlConverter;
 import javafx.application.Platform;
@@ -20,11 +21,15 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.layout.GridPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
+import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
@@ -161,13 +166,61 @@ public class HistoryController {
     @FXML
     private TableColumn<SessionDisplay, Integer> sessionRecordCountColumn;
     
-    /** 会话详情文本区域 */
+    /** 会话详情容器 */
     @FXML
-    private TextArea sessionDetailTextArea;
+    private VBox sessionDetailContainer;
     
-    /** 查看会话详细记录按钮 */
+    /** 会话详情占位符标签 */
     @FXML
-    private Button viewSessionDetailsButton;
+    private Label sessionDetailPlaceholder;
+    
+    /** 会话信息网格 */
+    @FXML
+    private GridPane sessionInfoGrid;
+    
+    /** 会话速度网格 */
+    @FXML
+    private GridPane sessionSpeedGrid;
+    
+    /** 会话ID标签 */
+    @FXML
+    private Label sessionIdLabel;
+    
+    /** 会话网卡名称标签 */
+    @FXML
+    private Label sessionIfaceLabel;
+    
+    /** 会话开始时间标签 */
+    @FXML
+    private Label sessionStartTimeLabel;
+    
+    /** 会话结束时间标签 */
+    @FXML
+    private Label sessionEndTimeLabel;
+    
+    /** 会话持续时间标签 */
+    @FXML
+    private Label sessionDurationLabel;
+    
+    /** 会话记录数标签 */
+    @FXML
+    private Label sessionRecordCountLabel;
+    
+    /** 会话平均下行速度标签 */
+    @FXML
+    private Label sessionAvgDownLabel;
+    
+    /** 会话平均上行速度标签 */
+    @FXML
+    private Label sessionAvgUpLabel;
+    
+    /** 会话最大下行速度标签 */
+    @FXML
+    private Label sessionMaxDownLabel;
+    
+    /** 会话最大上行速度标签 */
+    @FXML
+    private Label sessionMaxUpLabel;
     
     /** 删除会话按钮 */
     @FXML
@@ -193,8 +246,19 @@ public class HistoryController {
     @FXML
     private Button cancelAIDiagnosisButton;
     
+    /** 导出 Excel 按钮 */
+    @FXML
+    private Button exportExcelButton;
+    
+    /** 导出 PDF 按钮 */
+    @FXML
+    private Button exportPDFButton;
+    
     /** 当前正在执行的 AI 诊断任务（用于取消功能） */
     private Task<String> currentDiagnosisTask;
+    
+    /** 当前会话的 AI 诊断报告内容（Markdown 格式） */
+    private String currentAIDiagnosisReport;
     
     // ========== 数据模型 ==========
     
@@ -291,8 +355,19 @@ public class HistoryController {
         // 初始化 IP 归属地显示区域
         ipLocationTextArea.setPromptText("IP 归属地信息将显示在这里...\n\n提示：\n1. 在输入框中输入 IP 地址并点击\"查询\"按钮\n2. 或点击表格中的任意行，系统将尝试从该行数据中提取 IP 地址");
         
-        // 初始化会话详情显示区域
-        sessionDetailTextArea.setPromptText("选择会话查看详细信息...");
+        // 初始化会话详情显示区域（默认显示占位符）
+        if (sessionDetailPlaceholder != null) {
+            sessionDetailPlaceholder.setVisible(true);
+            sessionDetailPlaceholder.setManaged(true);
+        }
+        if (sessionInfoGrid != null) {
+            sessionInfoGrid.setVisible(false);
+            sessionInfoGrid.setManaged(false);
+        }
+        if (sessionSpeedGrid != null) {
+            sessionSpeedGrid.setVisible(false);
+            sessionSpeedGrid.setManaged(false);
+        }
         
         // 设置详细记录表格行选择监听器
         historyTable.getSelectionModel().selectedItemProperty().addListener(
@@ -325,7 +400,7 @@ public class HistoryController {
                             currentViewingSessionId = null;
                             // 如果当前在详细记录标签页，显示提示信息
                             if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
-                                statusLabel.setText("请选择一个会话查看详细记录");
+                                statusLabel.setText("请选择一个会话，详细记录将自动加载（切换到详细记录标签页查看）");
                             }
                         });
                     }
@@ -339,12 +414,12 @@ public class HistoryController {
                 // 当选择发生变化时更新 UI
                 updateDeleteButtonState();
                 
-                // 如果有选中项，显示第一个选中项的详情（文本形式）
+                // 如果有选中项，显示第一个选中项的详情（数据卡片形式）
                 if (!sessionTable.getSelectionModel().getSelectedItems().isEmpty()) {
                     SessionDisplay firstSelected = sessionTable.getSelectionModel().getSelectedItems().get(0);
                     onSessionRowSelected(firstSelected);
                 } else {
-                    sessionDetailTextArea.setText("");
+                    clearSessionDetail();
                 }
             }
         );
@@ -376,37 +451,6 @@ public class HistoryController {
                 loadHistoryData();
             }
         }
-    }
-    
-    /**
-     * 查看会话详细记录按钮点击事件（可选功能）
-     * 
-     * <p>注意：由于已实现"选中即加载"功能，此按钮现在作为可选功能保留。
-     * 如果用户想要手动触发加载，可以点击此按钮。</p>
-     * 
-     * <p>功能说明：</p>
-     * <ul>
-     *   <li>如果当前没有选中会话，提示用户先选择</li>
-     *   <li>如果已选中会话，切换到详细记录标签页并加载数据</li>
-     *   <li>此方法会调用 onSessionSelectedAutoLoad，确保行为一致</li>
-     * </ul>
-     */
-    @FXML
-    protected void onViewSessionDetailsClick() {
-        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
-        if (selectedSession == null) {
-            showAlert(Alert.AlertType.WARNING, "未选择会话", 
-                "请先在会话列表中选择一个会话。\n\n提示：选中会话后，系统会自动加载详细记录。");
-            return;
-        }
-        
-        // 调用自动加载方法（确保行为一致）
-        onSessionSelectedAutoLoad(selectedSession);
-        
-        // 确保切换到详细记录标签页
-        Platform.runLater(() -> {
-            mainTabPane.getSelectionModel().select(1);
-        });
     }
     
     /**
@@ -457,8 +501,7 @@ public class HistoryController {
         }
         if (aiDiagnosisWebView != null) {
             // 在 WebView 中显示加载提示
-            String loadingHtml = MarkdownToHtmlConverter.convertToHtml("## 正在加载...\n\n正在加载会话数据并生成 AI 诊断报告，请稍候...");
-            aiDiagnosisWebView.getEngine().loadContent(loadingHtml);
+            loadAIDiagnosisToWebView("## 正在加载...\n\n正在加载会话数据并生成 AI 诊断报告，请稍候...");
         }
         
         statusLabel.setText("正在执行 AI 诊断...");
@@ -500,8 +543,7 @@ public class HistoryController {
         diagnosisTask.setOnCancelled(e -> {
             Platform.runLater(() -> {
                 if (aiDiagnosisWebView != null) {
-                    String cancelledHtml = MarkdownToHtmlConverter.convertToHtml("## 诊断已取消\n\nAI 诊断已被用户取消。");
-                    aiDiagnosisWebView.getEngine().loadContent(cancelledHtml);
+                    loadAIDiagnosisToWebView("## 诊断已取消\n\nAI 诊断已被用户取消。");
                 }
                 if (aiDiagnosisProgress != null) {
                     aiDiagnosisProgress.setVisible(false);
@@ -520,11 +562,13 @@ public class HistoryController {
         diagnosisTask.setOnSucceeded(e -> {
             try {
                 String markdownReport = diagnosisTask.getValue();
+                // 保存原始 Markdown 内容，用于 PDF 导出
+                currentAIDiagnosisReport = markdownReport;
+                
                 Platform.runLater(() -> {
                     if (aiDiagnosisWebView != null) {
                         // 将 Markdown 转换为 HTML 并在 WebView 中显示
-                        String htmlContent = MarkdownToHtmlConverter.convertToHtml(markdownReport);
-                        aiDiagnosisWebView.getEngine().loadContent(htmlContent);
+                        loadAIDiagnosisToWebView(markdownReport);
                     }
                     if (aiDiagnosisProgress != null) {
                         aiDiagnosisProgress.setVisible(false);
@@ -565,14 +609,27 @@ public class HistoryController {
     }
     
     /**
+     * 将 AI 诊断结果加载到 WebView 中
+     * 
+     * <p>此方法将 Markdown 格式的 AI 诊断结果转换为 HTML 并加载到 WebView 中显示。</p>
+     * 
+     * @param markdownContent Markdown 格式的 AI 诊断结果
+     */
+    private void loadAIDiagnosisToWebView(String markdownContent) {
+        if (aiDiagnosisWebView != null && markdownContent != null) {
+            String htmlContent = MarkdownToHtmlConverter.convertToHtml(markdownContent);
+            aiDiagnosisWebView.getEngine().loadContent(htmlContent);
+        }
+    }
+    
+    /**
      * 处理 AI 诊断错误
      */
     private void handleAIDiagnosisError(String message, Throwable exception) {
         if (aiDiagnosisWebView != null) {
             // 在 WebView 中显示错误信息（使用 Markdown 格式）
             String errorMarkdown = "## 错误\n\n**" + message + "**";
-            String errorHtml = MarkdownToHtmlConverter.convertToHtml(errorMarkdown);
-            aiDiagnosisWebView.getEngine().loadContent(errorHtml);
+            loadAIDiagnosisToWebView(errorMarkdown);
         }
         if (aiDiagnosisProgress != null) {
             aiDiagnosisProgress.setVisible(false);
@@ -591,6 +648,191 @@ public class HistoryController {
         if (exception != null) {
             exception.printStackTrace();
         }
+    }
+    
+    /**
+     * 导出 Excel 按钮点击事件
+     */
+    @FXML
+    protected void onExportExcelClick() {
+        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
+        if (selectedSession == null) {
+            showAlert(Alert.AlertType.WARNING, "未选择会话", "请先选择一个监控会话进行导出。");
+            return;
+        }
+        
+        // 使用 FileChooser 选择保存路径
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("导出 Excel 文件");
+        fileChooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("Excel 文件", "*.xlsx")
+        );
+        fileChooser.setInitialFileName("会话_" + selectedSession.getSessionId() + "_" + 
+            new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".xlsx");
+        
+        Stage stage = (Stage) exportExcelButton.getScene().getWindow();
+        File file = fileChooser.showSaveDialog(stage);
+        
+        if (file == null) {
+            return; // 用户取消了选择
+        }
+        
+        // 异步执行导出任务
+        Task<Void> exportTask = new Task<>() {
+            @Override
+            protected Void call() throws Exception {
+                updateMessage("正在查询会话数据...");
+                
+                // 查询会话信息
+                List<DatabaseService.MonitoringSession> sessions = databaseService.getAllSessions().get();
+                DatabaseService.MonitoringSession session = sessions.stream()
+                        .filter(s -> s.getSessionId() == selectedSession.getSessionId())
+                        .findFirst()
+                        .orElse(null);
+                
+                if (session == null) {
+                    throw new Exception("会话不存在: session_id=" + selectedSession.getSessionId());
+                }
+                
+                updateMessage("正在查询流量明细记录...");
+                
+                // 查询该会话的所有记录
+                List<DatabaseService.TrafficRecord> records = databaseService.getRecordsBySession(
+                        selectedSession.getSessionId()).get();
+                
+                updateMessage("正在导出 Excel 文件...");
+                
+                // 执行导出
+                ExportService.exportSessionToExcel(session, records, file);
+                
+                return null;
+            }
+        };
+        
+        // 任务成功完成
+        exportTask.setOnSucceeded(e -> {
+            Platform.runLater(() -> {
+                showAlert(Alert.AlertType.INFORMATION, "导出成功", 
+                    "Excel 文件已成功导出到：\n" + file.getAbsolutePath());
+                statusLabel.setText("Excel 导出完成");
+            });
+        });
+        
+        // 任务失败
+        exportTask.setOnFailed(e -> {
+            Platform.runLater(() -> {
+                Throwable exception = exportTask.getException();
+                String errorMsg = exception != null ? exception.getMessage() : "未知错误";
+                statusLabel.setText("Excel 导出失败: " + errorMsg);
+                showAlert(Alert.AlertType.ERROR, "导出失败", 
+                    "导出 Excel 文件时发生错误：\n" + errorMsg);
+                
+                if (exception != null) {
+                    exception.printStackTrace();
+                }
+            });
+        });
+        
+        // 启动任务
+        Thread exportThread = new Thread(exportTask);
+        exportThread.setDaemon(true);
+        exportThread.start();
+        
+        statusLabel.setText("正在导出 Excel 文件...");
+    }
+    
+    /**
+     * 导出 PDF 按钮点击事件
+     */
+    @FXML
+    protected void onExportPDFClick() {
+        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
+        if (selectedSession == null) {
+            showAlert(Alert.AlertType.WARNING, "未选择会话", "请先选择一个监控会话进行导出。");
+            return;
+        }
+        
+        // 检查是否有 AI 诊断结果
+        if (currentAIDiagnosisReport == null || currentAIDiagnosisReport.trim().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "无 AI 诊断结果", 
+                "请先执行 AI 诊断，生成分析报告后再导出 PDF。");
+            return;
+        }
+        
+        String aiReportContent = currentAIDiagnosisReport;
+        
+        // 使用 FileChooser 选择保存路径
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("导出 PDF 文件");
+        fileChooser.getExtensionFilters().add(
+            new FileChooser.ExtensionFilter("PDF 文件", "*.pdf")
+        );
+        fileChooser.setInitialFileName("AI报告_会话_" + selectedSession.getSessionId() + "_" + 
+            new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".pdf");
+        
+        Stage stage = (Stage) exportPDFButton.getScene().getWindow();
+        File file = fileChooser.showSaveDialog(stage);
+        
+        if (file == null) {
+            return; // 用户取消了选择
+        }
+        
+        // 异步执行导出任务
+        Task<Void> exportTask = new Task<>() {
+            @Override
+            protected Void call() throws Exception {
+                updateMessage("正在查询会话数据...");
+                
+                // 查询会话信息
+                List<DatabaseService.MonitoringSession> sessions = databaseService.getAllSessions().get();
+                DatabaseService.MonitoringSession session = sessions.stream()
+                        .filter(s -> s.getSessionId() == selectedSession.getSessionId())
+                        .findFirst()
+                        .orElse(null);
+                
+                if (session == null) {
+                    throw new Exception("会话不存在: session_id=" + selectedSession.getSessionId());
+                }
+                
+                updateMessage("正在导出 PDF 文件...");
+                
+                // 执行导出
+                ExportService.exportAIReportToPDF(session, aiReportContent, file);
+                
+                return null;
+            }
+        };
+        
+        // 任务成功完成
+        exportTask.setOnSucceeded(e -> {
+            Platform.runLater(() -> {
+                showAlert(Alert.AlertType.INFORMATION, "导出成功", 
+                    "PDF 文件已成功导出到：\n" + file.getAbsolutePath());
+                statusLabel.setText("PDF 导出完成");
+            });
+        });
+        
+        // 任务失败
+        exportTask.setOnFailed(e -> {
+            Platform.runLater(() -> {
+                Throwable exception = exportTask.getException();
+                String errorMsg = exception != null ? exception.getMessage() : "未知错误";
+                statusLabel.setText("PDF 导出失败: " + errorMsg);
+                showAlert(Alert.AlertType.ERROR, "导出失败", 
+                    "导出 PDF 文件时发生错误：\n" + errorMsg);
+                
+                if (exception != null) {
+                    exception.printStackTrace();
+                }
+            });
+        });
+        
+        // 启动任务
+        Thread exportThread = new Thread(exportTask);
+        exportThread.setDaemon(true);
+        exportThread.start();
+        
+        statusLabel.setText("正在导出 PDF 文件...");
     }
     
     /**
@@ -831,7 +1073,7 @@ public class HistoryController {
                         statusLabel.setText(String.format("成功删除 %d 个会话", deletedCount));
                         
                         // 清空会话详情显示
-                        sessionDetailTextArea.setText("");
+                        clearSessionDetail();
                         
                         // 如果当前查看的是已删除会话的详细记录，清空详细记录表格
                         if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
@@ -882,7 +1124,7 @@ public class HistoryController {
                         statusLabel.setText(String.format("会话 #%d 已删除", sessionId));
                         
                         // 清空会话详情显示
-                        sessionDetailTextArea.setText("");
+                        clearSessionDetail();
                         
                         // 如果当前查看的是该会话的详细记录，清空详细记录表格
                         if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
@@ -1190,26 +1432,97 @@ public class HistoryController {
     }
     
     /**
-     * 会话行选择事件处理（仅更新会话详情文本区域）
+     * 会话行选择事件处理（更新会话详情数据卡片）
      * 此方法用于在右侧会话详情区域显示会话的基本信息
      * 
      * @param selectedSession 选中的会话对象
      */
     private void onSessionRowSelected(SessionDisplay selectedSession) {
-        StringBuilder detail = new StringBuilder();
-        detail.append("会话 ID: ").append(selectedSession.getSessionId()).append("\n");
-        detail.append("网卡名称: ").append(selectedSession.getIfaceName()).append("\n");
-        detail.append("开始时间: ").append(selectedSession.getStartTime()).append("\n");
-        detail.append("结束时间: ").append(selectedSession.getEndTime() != null && !selectedSession.getEndTime().isEmpty() 
-            ? selectedSession.getEndTime() : "进行中").append("\n");
-        detail.append("持续时间: ").append(selectedSession.getDurationSeconds()).append(" 秒\n");
-        detail.append("平均下行速度: ").append(String.format("%.2f", selectedSession.getAvgDownSpeed())).append(" KB/s\n");
-        detail.append("平均上行速度: ").append(String.format("%.2f", selectedSession.getAvgUpSpeed())).append(" KB/s\n");
-        detail.append("最大下行速度: ").append(String.format("%.2f", selectedSession.getMaxDownSpeed())).append(" KB/s\n");
-        detail.append("最大上行速度: ").append(String.format("%.2f", selectedSession.getMaxUpSpeed())).append(" KB/s\n");
-        detail.append("记录数量: ").append(selectedSession.getRecordCount()).append(" 条\n");
+        if (selectedSession == null) {
+            clearSessionDetail();
+            return;
+        }
         
-        sessionDetailTextArea.setText(detail.toString());
+        // 隐藏占位符，显示数据卡片
+        if (sessionDetailPlaceholder != null) {
+            sessionDetailPlaceholder.setVisible(false);
+            sessionDetailPlaceholder.setManaged(false);
+        }
+        if (sessionInfoGrid != null) {
+            sessionInfoGrid.setVisible(true);
+            sessionInfoGrid.setManaged(true);
+        }
+        if (sessionSpeedGrid != null) {
+            sessionSpeedGrid.setVisible(true);
+            sessionSpeedGrid.setManaged(true);
+        }
+        
+        // 填充基本信息卡片
+        if (sessionIdLabel != null) {
+            sessionIdLabel.setText(String.valueOf(selectedSession.getSessionId()));
+        }
+        if (sessionIfaceLabel != null) {
+            sessionIfaceLabel.setText(selectedSession.getIfaceName() != null ? selectedSession.getIfaceName() : "--");
+        }
+        if (sessionStartTimeLabel != null) {
+            sessionStartTimeLabel.setText(selectedSession.getStartTime() != null ? selectedSession.getStartTime() : "--");
+        }
+        if (sessionEndTimeLabel != null) {
+            String endTime = selectedSession.getEndTime() != null && !selectedSession.getEndTime().isEmpty() 
+                ? selectedSession.getEndTime() : "进行中";
+            sessionEndTimeLabel.setText(endTime);
+        }
+        if (sessionDurationLabel != null) {
+            sessionDurationLabel.setText(String.valueOf(selectedSession.getDurationSeconds()));
+        }
+        if (sessionRecordCountLabel != null) {
+            sessionRecordCountLabel.setText(String.valueOf(selectedSession.getRecordCount()));
+        }
+        
+        // 填充速度指标卡片
+        if (sessionAvgDownLabel != null) {
+            sessionAvgDownLabel.setText(String.format("%.2f", selectedSession.getAvgDownSpeed()));
+        }
+        if (sessionAvgUpLabel != null) {
+            sessionAvgUpLabel.setText(String.format("%.2f", selectedSession.getAvgUpSpeed()));
+        }
+        if (sessionMaxDownLabel != null) {
+            sessionMaxDownLabel.setText(String.format("%.2f", selectedSession.getMaxDownSpeed()));
+        }
+        if (sessionMaxUpLabel != null) {
+            sessionMaxUpLabel.setText(String.format("%.2f", selectedSession.getMaxUpSpeed()));
+        }
+    }
+    
+    /**
+     * 清空会话详情显示区域
+     */
+    private void clearSessionDetail() {
+        // 显示占位符，隐藏数据卡片
+        if (sessionDetailPlaceholder != null) {
+            sessionDetailPlaceholder.setVisible(true);
+            sessionDetailPlaceholder.setManaged(true);
+        }
+        if (sessionInfoGrid != null) {
+            sessionInfoGrid.setVisible(false);
+            sessionInfoGrid.setManaged(false);
+        }
+        if (sessionSpeedGrid != null) {
+            sessionSpeedGrid.setVisible(false);
+            sessionSpeedGrid.setManaged(false);
+        }
+        
+        // 清空所有标签
+        if (sessionIdLabel != null) sessionIdLabel.setText("--");
+        if (sessionIfaceLabel != null) sessionIfaceLabel.setText("--");
+        if (sessionStartTimeLabel != null) sessionStartTimeLabel.setText("--");
+        if (sessionEndTimeLabel != null) sessionEndTimeLabel.setText("--");
+        if (sessionDurationLabel != null) sessionDurationLabel.setText("--");
+        if (sessionRecordCountLabel != null) sessionRecordCountLabel.setText("--");
+        if (sessionAvgDownLabel != null) sessionAvgDownLabel.setText("--");
+        if (sessionAvgUpLabel != null) sessionAvgUpLabel.setText("--");
+        if (sessionMaxDownLabel != null) sessionMaxDownLabel.setText("--");
+        if (sessionMaxUpLabel != null) sessionMaxUpLabel.setText("--");
     }
     
     /**
@@ -1220,7 +1533,7 @@ public class HistoryController {
      *   <li>当用户在会话列表 TableView 中选中某一行时，自动触发此方法</li>
      *   <li>异步加载该会话的所有明细记录，并更新到详细记录表格中</li>
      *   <li>实现防抖处理：如果用户快速连续选择多行，只显示最后一次选中的结果</li>
-     *   <li>自动切换到详细记录标签页，方便用户查看</li>
+     *   <li>注意：不会自动切换标签页，用户需要手动切换到"详细记录"标签页查看</li>
      * </ul>
      * 
      * <p>执行流程：</p>
@@ -1229,7 +1542,7 @@ public class HistoryController {
      *   <li>获取选中会话的 sessionId</li>
      *   <li>创建异步任务调用 DatabaseService.getRecordsBySession()</li>
      *   <li>使用 Platform.runLater() 更新 UI（详细记录表格）</li>
-     *   <li>自动切换到详细记录标签页</li>
+     *   <li>数据加载完成后，用户可切换到"详细记录"标签页查看</li>
      * </ol>
      * 
      * @param selectedSession 选中的会话对象
@@ -1255,10 +1568,7 @@ public class HistoryController {
             historyData.clear();
             statusLabel.setText(String.format("正在加载会话 #%d 的详细记录...", sessionId));
             
-            // 自动切换到详细记录标签页（如果当前不在该标签页）
-            if (mainTabPane.getSelectionModel().getSelectedIndex() != 1) {
-                mainTabPane.getSelectionModel().select(1);
-            }
+            // 注意：不再自动切换到详细记录标签页，用户需要手动切换查看
         });
         
         // ========== 异步加载详细记录 ==========

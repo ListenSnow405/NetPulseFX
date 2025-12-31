@@ -14,6 +14,8 @@
 <?import javafx.scene.web.WebView?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.ColumnConstraints?>
 
 <!--
     历史数据查看窗口布局文件
@@ -22,6 +24,7 @@
 <VBox spacing="15.0" xmlns="http://javafx.com/javafx"
       xmlns:fx="http://javafx.com/fxml"
       fx:controller="com.netpulse.netpulsefx.HistoryController"
+      stylesheets="@history-view.css"
       prefHeight="500.0" prefWidth="800.0">
     <!-- 设置整体内边距 -->
     <padding>
@@ -56,25 +59,131 @@
                 </TableView>
                 
                 <!-- 右侧：会话详情 -->
-                <VBox spacing="10.0" style="-fx-padding: 15px;" VBox.vgrow="ALWAYS">
-                    <Label text="会话详情" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
-                    <TextArea fx:id="sessionDetailTextArea" editable="false" wrapText="true"
-                              style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
-                              prefHeight="150.0">
-                        <VBox.margin>
-                            <Insets top="5.0"/>
-                        </VBox.margin>
-                    </TextArea>
-                    <HBox spacing="10.0">
-                        <Button fx:id="viewSessionDetailsButton" text="查看详细记录" 
-                                onAction="#onViewSessionDetailsClick"
-                                style="-fx-pref-width: 150px;"/>
+                <VBox spacing="15.0" styleClass="detail-container" VBox.vgrow="ALWAYS">
+                    <Label text="会话详情" styleClass="detail-title"/>
+                    
+                    <!-- 数据卡片区域 -->
+                    <VBox fx:id="sessionDetailContainer" spacing="10.0" VBox.vgrow="NEVER">
+                        <!-- 基本信息卡片网格 -->
+                        <GridPane fx:id="sessionInfoGrid" styleClass="data-card-grid" hgap="10.0" vgap="10.0">
+                            <columnConstraints>
+                                <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                                <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                            </columnConstraints>
+                            
+                            <!-- 会话ID卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                                <Label text="会话ID" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionIdLabel" text="--" styleClass="data-card-value"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 网卡名称卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                                <Label text="网卡名称" styleClass="data-card-title"/>
+                                <Label fx:id="sessionIfaceLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                            </VBox>
+                            
+                            <!-- 开始时间卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="1">
+                                <Label text="开始时间" styleClass="data-card-title"/>
+                                <Label fx:id="sessionStartTimeLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                            </VBox>
+                            
+                            <!-- 结束时间卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="1">
+                                <Label text="结束时间" styleClass="data-card-title"/>
+                                <Label fx:id="sessionEndTimeLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                            </VBox>
+                            
+                            <!-- 持续时间卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="2">
+                                <Label text="持续时间" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionDurationLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="秒" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 记录数卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="2">
+                                <Label text="记录数" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionRecordCountLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="条" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                        </GridPane>
+                        
+                        <!-- 流量速度指标卡片网格 -->
+                        <GridPane fx:id="sessionSpeedGrid" styleClass="data-card-grid" hgap="10.0" vgap="10.0">
+                            <columnConstraints>
+                                <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                                <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                            </columnConstraints>
+                            
+                            <!-- 平均下行速度卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                                <Label text="平均下行速度" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionAvgDownLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="KB/s" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 平均上行速度卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                                <Label text="平均上行速度" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionAvgUpLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="KB/s" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 最大下行速度卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="1">
+                                <Label text="最大下行速度" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionMaxDownLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="KB/s" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 最大上行速度卡片 -->
+                            <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="1">
+                                <Label text="最大上行速度" styleClass="data-card-title"/>
+                                <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                    <Label fx:id="sessionMaxUpLabel" text="--" styleClass="data-card-value"/>
+                                    <Label text="KB/s" styleClass="data-card-unit"/>
+                                </HBox>
+                            </VBox>
+                        </GridPane>
+                        
+                        <!-- 空状态提示 -->
+                        <Label fx:id="sessionDetailPlaceholder" text="选择会话查看详细信息..." 
+                               style="-fx-text-fill: #999999; -fx-font-size: 13px; -fx-alignment: center;"
+                               visible="true" managed="true">
+                            <VBox.margin>
+                                <Insets top="20.0" bottom="20.0"/>
+                            </VBox.margin>
+                        </Label>
+                    </VBox>
+                    
+                    <!-- 操作按钮组 -->
+                    <HBox spacing="10.0" alignment="CENTER">
                         <Button fx:id="aiDiagnosisButton" text="AI 诊断" 
                                 onAction="#onAIDiagnosisClick"
-                                style="-fx-pref-width: 150px; -fx-background-color: #4a90e2; -fx-text-fill: white;"/>
+                                prefWidth="120.0"/>
+                        <Button fx:id="exportExcelButton" text="导出 Excel" 
+                                onAction="#onExportExcelClick"
+                                prefWidth="120.0"/>
+                        <Button fx:id="exportPDFButton" text="导出 PDF" 
+                                onAction="#onExportPDFClick"
+                                prefWidth="120.0"/>
                         <Button fx:id="deleteSessionButton" text="删除会话" 
                                 onAction="#onDeleteSessionClick"
-                                style="-fx-pref-width: 150px; -fx-background-color: #ff6b6b; -fx-text-fill: white;"/>
+                                prefWidth="120.0"/>
                     </HBox>
                     
                     <!-- AI 诊断结果展示区域 -->

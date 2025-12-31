@@ -5,31 +5,48 @@ module com.netpulse.netpulsefx {
 
     requires org.controlsfx.controls;
     requires com.dlsc.formsfx;
-    
+
     // JDBC API（用于数据库操作）
     requires java.sql;
-    
+
     // HTTP Client（用于 AI API 调用）
     requires java.net.http;
-    
+
     // Pcap4j 库依赖（自动模块，基于 artifactId）
+    // 注意：如果编译时出现模块找不到的错误，可能需要将 pcap4j 也放在未命名模块中
     requires org.pcap4j.core;
     // packetfactory-static 用于解析数据包（提取IP地址）
     // 注意：由于 'static' 是 Java 关键字，不能直接用作模块名
     // 如果 pcap4j-packetfactory-static 不是模块化的，将通过类路径访问
     // 如果需要，可以尝试使用引号或检查实际的模块名
-    
+
     // SLF4J 日志实现：解决 SLF4J 警告
+    // SLF4J 2.0.12 是模块化的，模块名是 org.slf4j
+    // 注意：某些库可能期望 slf4j.api，但 SLF4J 2.x 的模块名是 org.slf4j
+    requires org.slf4j;
     requires org.slf4j.simple;
-    
+
     // H2 Database：嵌入式数据库，用于存储流量历史数据
     // 迁移说明：从 SQLite 迁移到 H2，以解决 SLF4J 依赖冲突问题
+    // H2 2.2.224 是模块化的，但如果它声明了 requires slf4j.api，可能需要通过 --add-reads 解决
     requires com.h2database;
-    
+
     // Flexmark：Markdown 转 HTML 支持（用于 AI 诊断报告渲染）
     // 注意：flexmark-all 不是模块化的，它在未命名模块中
     // 对于未命名模块，不需要 requires 声明，但需要在运行时添加 --add-reads 参数
     // 这个参数在 JavaFX Maven 插件中配置
+
+    // Apache POI：Excel 文件导出支持
+    // 注意：Apache POI 5.x 声明了 requires slf4j.api，但 SLF4J 2.0.9 的模块名是 org.slf4j
+    // 为了避免模块名不匹配的问题，将 POI 也放在未命名模块中
+    requires org.apache.poi.poi;
+    requires org.apache.poi.ooxml;
+
+    // iText 7：PDF 文件导出支持
+    // iText 7 8.0.2 是模块化的，使用完整的模块名
+    requires com.itextpdf.kernel;
+    requires com.itextpdf.layout;
+    requires com.itextpdf.io;
 
     opens com.netpulse.netpulsefx to javafx.fxml;
     exports com.netpulse.netpulsefx;

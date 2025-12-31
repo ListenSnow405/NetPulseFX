@@ -16,6 +16,29 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+
+        <!-- iText 7：PDF 文件导出支持 -->
+        <!-- 注意：使用单独的模块依赖，而不是 POM 类型 -->
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>kernel</artifactId>
+            <version>8.0.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>layout</artifactId>
+            <version>8.0.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>io</artifactId>
+            <version>8.0.2</version>
+        </dependency>
+        <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <version>2.2.224</version>
@@ -30,11 +53,15 @@
             <artifactId>pcap4j-packetfactory-static</artifactId>
             <version>1.8.2</version>
         </dependency>
-        <!-- SLF4J 日志实现：解决 SLF4J 警告 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.12</version>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
-            <version>1.7.36</version>
+            <version>2.0.12</version>
         </dependency>
         <dependency>
             <groupId>org.openjfx</groupId>
@@ -97,9 +124,16 @@
                     <source>21</source>
                     <target>21</target>
                     <compilerArgs>
-                        <!-- 如果 flexmark 在未命名模块中，添加读取权限 -->
+                        <!-- 允许访问未命名模块中的 flexmark 等非模块化库 -->
                         <arg>--add-reads</arg>
                         <arg>com.netpulse.netpulsefx=ALL-UNNAMED</arg>
+                        <!-- 解决模块名不匹配：让期望 slf4j.api 的模块能够访问 org.slf4j -->
+                        <arg>--add-reads</arg>
+                        <arg>org.apache.poi.poi=org.slf4j</arg>
+                        <arg>--add-reads</arg>
+                        <arg>org.apache.poi.ooxml=org.slf4j</arg>
+                        <arg>--add-reads</arg>
+                        <arg>com.h2database=org.slf4j</arg>
                     </compilerArgs>
                 </configuration>
             </plugin>
@@ -119,7 +153,7 @@
                             <noManPages>true</noManPages>
                             <stripDebug>true</stripDebug>
                             <noHeaderFiles>true</noHeaderFiles>
-                            <!-- 添加运行时参数，允许访问未命名模块中的 flexmark -->
+                            <!-- 添加运行时参数，允许访问未命名模块中的 flexmark、POI、iText -->
                             <options>
                                 <option>--add-reads</option>
                                 <option>com.netpulse.netpulsefx=ALL-UNNAMED</option>
