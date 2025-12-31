@@ -8,6 +8,9 @@ module com.netpulse.netpulsefx {
     // JDBC API（用于数据库操作）
     requires java.sql;
     
+    // HTTP Client（用于 AI API 调用）
+    requires java.net.http;
+    
     // Pcap4j 库依赖（自动模块，基于 artifactId）
     requires org.pcap4j.core;
     // 注意：packetfactory-static 暂时注释，因为自动模块名解析问题
@@ -25,4 +28,5 @@ module com.netpulse.netpulsefx {
     exports com.netpulse.netpulsefx;
     exports com.netpulse.netpulsefx.service;
     exports com.netpulse.netpulsefx.exception;
+    exports com.netpulse.netpulsefx.model;
 }

@@ -1,6 +1,9 @@
 package com.netpulse.netpulsefx;
 
 import com.netpulse.netpulsefx.exception.NetworkInterfaceException;
+import com.netpulse.netpulsefx.model.AIConfig;
+import com.netpulse.netpulsefx.model.TrafficData;
+import com.netpulse.netpulsefx.service.AIService;
 import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.NetworkInterfaceService;
 import com.netpulse.netpulsefx.task.TrafficMonitorTask;
@@ -16,12 +19,16 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TextArea;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.XYChart;
 import javafx.stage.Stage;
 import org.pcap4j.core.PcapNetworkInterface;
 
 import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -68,6 +75,18 @@ public class MainController {
     @FXML
     private Button stopMonitorButton;
     
+    /** AI 分析按钮 */
+    @FXML
+    private Button aiAnalyzeButton;
+    
+    /** AI 状态标签 */
+    @FXML
+    private Label aiStatusLabel;
+    
+    /** AI 诊断报告文本区域 */
+    @FXML
+    private TextArea aiReportTextArea;
+    
     /** 实时流量波形图 */
     @FXML
     private LineChart<String, Number> trafficChart;
@@ -86,6 +105,9 @@ public class MainController {
     
     /** 数据库服务对象：负责流量数据的持久化存储 */
     private DatabaseService databaseService;
+    
+    /** AI 服务对象：负责流量数据的智能分析 */
+    private AIService aiService;
     
     /** 存储实际的网卡对象列表，用于后续的监控操作 */
     private List<PcapNetworkInterface> pcapNetworkInterfaces;
@@ -136,8 +158,15 @@ public class MainController {
         // 初始化数据库服务（用于保存流量历史数据）
         databaseService = DatabaseService.getInstance();
         
+        // 初始化 AI 服务
+        // 注意：这里使用默认配置，实际项目中可以从配置文件或环境变量读取
+        initializeAIService();
+        
         // 初始化流量监控相关组件
         initializeTrafficMonitoring();
+        
+        // 初始化 AI 报告区域
+        aiReportTextArea.setPromptText("AI 分析报告将显示在这里...\n\n提示：点击\"AI 分析流量\"按钮，系统将从数据库读取历史流量数据并进行智能分析。");
         
         // 设置自定义的 CellFactory，用于格式化显示网卡信息
         // 这样可以在 ListView 中显示更友好的网卡信息格式
@@ -315,6 +344,203 @@ public class MainController {
     @FXML
     protected void onStopMonitorButtonClick() {
         stopMonitoring();
+    }
+    
+    /**
+     * AI 分析按钮的点击事件处理
+     * 从数据库获取历史流量数据，调用 AI 服务进行分析
+     */
+    @FXML
+    protected void onAIAnalyzeButtonClick() {
+        // 禁用按钮，防止重复点击
+        aiAnalyzeButton.setDisable(true);
+        aiStatusLabel.setText("正在从数据库加载历史数据...");
+        aiReportTextArea.clear();
+        
+        // 创建后台任务：获取历史数据并调用 AI 分析
+        Task<String> analyzeTask = new Task<String>() {
+            @Override
+            protected String call() throws Exception {
+                // 第一步：从数据库获取历史数据
+                updateMessage("正在从数据库加载历史数据...");
+                List<DatabaseService.TrafficRecord> records = 
+                    databaseService.queryAllTrafficHistoryAsync().get();
+                
+                if (records.isEmpty()) {
+                    return "提示：数据库中没有流量历史数据。\n\n请先进行流量监控，收集一些数据后再尝试 AI 分析。";
+                }
+                
+                // 第二步：转换为 TrafficData 对象
+                updateMessage("正在准备分析数据（" + records.size() + " 条记录）...");
+                List<TrafficData> trafficDataList = convertToTrafficData(records);
+                
+                // 第三步：调用 AI 服务进行分析
+                updateMessage("正在调用 AI 服务进行分析，请稍候...");
+                return aiService.analyzeTraffic(trafficDataList).get();
+            }
+            
+            @Override
+            protected void succeeded() {
+                // 分析成功，更新 UI
+                Platform.runLater(() -> {
+                    String result = getValue();
+                    aiReportTextArea.setText(result);
+                    aiStatusLabel.setText("分析完成");
+                    aiAnalyzeButton.setDisable(false);
+                });
+            }
+            
+            @Override
+            protected void failed() {
+                // 分析失败，显示错误信息
+                Platform.runLater(() -> {
+                    Throwable exception = getException();
+                    String errorMsg = "分析失败：" + 
+                        (exception != null ? exception.getMessage() : "未知错误");
+                    aiReportTextArea.setText(errorMsg);
+                    aiStatusLabel.setText("分析失败");
+                    aiAnalyzeButton.setDisable(false);
+                });
+            }
+        };
+        
+        // 监听任务进度更新
+        analyzeTask.messageProperty().addListener((obs, oldMsg, newMsg) -> {
+            if (newMsg != null) {
+                Platform.runLater(() -> aiStatusLabel.setText(newMsg));
+            }
+        });
+        
+        // 启动后台任务
+        Thread analyzeThread = new Thread(analyzeTask);
+        analyzeThread.setDaemon(true);
+        analyzeThread.start();
+    }
+    
+    /**
+     * 初始化 AI 服务
+     * 
+     * <p>从配置中读取 API 信息并创建 AIService 实例。
+     * 优先使用环境变量配置，如果没有设置则使用默认配置。</p>
+     */
+    /**
+     * 清理环境变量值
+     * 去除首尾的引号、空白字符等
+     */
+    private String cleanEnvValue(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        // 去除首尾空白字符
+        value = value.trim();
+        // 去除首尾的引号（单引号或双引号）
+        if ((value.startsWith("\"") && value.endsWith("\"")) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value.trim();
+    }
+    
+    private void initializeAIService() {
+        // 尝试从环境变量读取配置，并清理值（去除引号和空白字符）
+        String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
+        String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
+        String apiKey = cleanEnvValue(System.getenv("AI_API_KEY"));
+        String model = cleanEnvValue(System.getenv("AI_MODEL"));
+        
+        // 如果环境变量已设置，使用环境变量配置
+        if (apiEndpoint != null && !apiEndpoint.isEmpty()) {
+            // 使用环境变量配置
+            String finalProvider = apiProvider != null && !apiProvider.isEmpty() 
+                ? apiProvider : "deepseek";
+            String finalModel = model != null && !model.isEmpty() 
+                ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : "gpt-3.5-turbo");
+            String finalApiKey = apiKey != null ? apiKey : "";
+            
+            aiService = new AIService(new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel));
+            
+            System.out.println("[MainController] AI 服务已初始化（环境变量配置）:");
+            System.out.println("  Provider: " + finalProvider);
+            System.out.println("  Endpoint: " + apiEndpoint);
+            System.out.println("  Model: " + finalModel);
+            System.out.println("  API Key: " + (finalApiKey.isEmpty() ? "未设置" : "已设置（长度: " + finalApiKey.length() + "）"));
+        } else {
+            // 环境变量未设置，根据 provider 使用默认配置
+            String finalProvider = (apiProvider != null && !apiProvider.isEmpty()) 
+                ? apiProvider : "ollama";
+            
+            if ("deepseek".equalsIgnoreCase(finalProvider)) {
+                AIConfig config = AIConfig.defaultDeepSeek();
+                String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
+                aiService = new AIService(new AIConfig(
+                    config.getProvider(),
+                    config.getApiEndpoint(),
+                    finalApiKey,
+                    finalModel
+                ));
+                System.out.println("[MainController] AI 服务已初始化（DeepSeek 默认配置）:");
+                System.out.println("  Endpoint: " + config.getApiEndpoint());
+                System.out.println("  Model: " + finalModel);
+                System.out.println("  API Key: " + (finalApiKey.isEmpty() ? "未设置（请在环境变量中设置 AI_API_KEY）" : "已设置"));
+            } else if ("openai".equalsIgnoreCase(finalProvider)) {
+                AIConfig config = AIConfig.defaultOpenAI();
+                String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
+                aiService = new AIService(new AIConfig(
+                    config.getProvider(),
+                    config.getApiEndpoint(),
+                    finalApiKey,
+                    finalModel
+                ));
+                System.out.println("[MainController] AI 服务已初始化（OpenAI 默认配置）");
+            } else {
+                // 默认使用 Ollama（本地）
+                AIConfig config = AIConfig.defaultOllama();
+                String finalModel = (model != null && !model.isEmpty()) ? model : "llama2";
+                aiService = new AIService(new AIConfig(
+                    config.getProvider(),
+                    config.getApiEndpoint(),
+                    config.getApiKey(),
+                    finalModel
+                ));
+                System.out.println("[MainController] AI 服务已初始化（Ollama 默认配置）");
+            }
+        }
+    }
+    
+    /**
+     * 将数据库记录转换为 TrafficData 对象列表
+     * 
+     * @param records 数据库记录列表
+     * @return TrafficData 对象列表
+     */
+    private List<TrafficData> convertToTrafficData(List<DatabaseService.TrafficRecord> records) {
+        List<TrafficData> trafficDataList = new ArrayList<>();
+        
+        for (DatabaseService.TrafficRecord record : records) {
+            // 将 Timestamp 转换为 LocalDateTime
+            LocalDateTime captureTime = record.getCaptureTime().toInstant()
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDateTime();
+            
+            // 计算数据包大小（这里简化为基于速度估算，实际应该从监控任务中获取）
+            // 假设每 KB/s 对应大约 1000 字节/秒的数据包
+            long packetSize = (long)((record.getDownSpeed() + record.getUpSpeed()) * 1000);
+            
+            TrafficData trafficData = new TrafficData(
+                record.getIfaceName(),
+                record.getDownSpeed(),
+                record.getUpSpeed(),
+                captureTime,
+                packetSize,
+                "UNKNOWN"  // 协议信息可以从监控任务中获取，这里暂时使用 UNKNOWN
+            );
+            
+            trafficDataList.add(trafficData);
+        }
+        
+        return trafficDataList;
     }
     
     /**
