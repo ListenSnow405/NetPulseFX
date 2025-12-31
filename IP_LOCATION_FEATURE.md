@@ -36,9 +36,10 @@
 
 **API 说明**:
 - 使用 ip-api.com 的免费 API
-- API 地址: `http://ip-api.com/json/{ip}`
+- API 地址: `http://ip-api.com/json/{ip}` (免费版仅支持 HTTP，不支持 HTTPS)
 - 免费版本限制: 每分钟 45 次请求
 - 响应格式: JSON
+- 请求超时: 10 秒
 
 **缓存机制**:
 - 使用 `ConcurrentHashMap` 实现线程安全的本地缓存

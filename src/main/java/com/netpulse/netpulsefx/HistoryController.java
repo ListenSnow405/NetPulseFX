@@ -201,6 +201,9 @@ public class HistoryController {
     /** AI 服务实例 */
     private AIService aiService;
     
+    /** 当前正在查看的会话ID（如果正在查看详细记录） */
+    private Integer currentViewingSessionId;
+    
     /** 时间格式化器 */
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     
@@ -318,7 +321,12 @@ public class HistoryController {
             loadSessionList();
         } else {
             // 第二个标签页：详细记录
-            loadHistoryData();
+            // 如果有当前查看的会话，加载该会话的记录；否则加载所有记录
+            if (currentViewingSessionId != null) {
+                loadSessionDetails(currentViewingSessionId);
+            } else {
+                loadHistoryData();
+            }
         }
     }
     
@@ -965,6 +973,9 @@ public class HistoryController {
      * 从数据库加载指定会话的详细记录
      */
     private void loadSessionDetails(int sessionId) {
+        // 记录当前查看的会话ID
+        currentViewingSessionId = sessionId;
+        
         refreshButton.setDisable(true);
         statusLabel.setText("正在加载会话详细记录...");
         
@@ -982,9 +993,11 @@ public class HistoryController {
                     Platform.runLater(() -> {
                         historyData.clear();
                         
+                        // ID从1开始重新编号
+                        int displayId = 1;
                         for (DatabaseService.TrafficRecord record : records) {
                             TrafficRecordDisplay display = new TrafficRecordDisplay(
-                                record.getId(),
+                                (long) displayId,  // 使用重新编号的ID
                                 record.getIfaceName(),
                                 record.getDownSpeed(),
                                 record.getUpSpeed(),
@@ -994,6 +1007,7 @@ public class HistoryController {
                                 formatTimestamp(record.getCaptureTime())
                             );
                             historyData.add(display);
+                            displayId++;
                         }
                         
                         statusLabel.setText(String.format("会话 #%d 共 %d 条记录", sessionId, records.size()));
@@ -1044,7 +1058,7 @@ public class HistoryController {
     }
     
     /**
-     * 从数据库加载历史数据
+     * 从数据库加载历史数据（所有会话的记录）
      * 
      * <p>执行流程：</p>
      * <ol>
@@ -1054,6 +1068,9 @@ public class HistoryController {
      * </ol>
      */
     private void loadHistoryData() {
+        // 清空当前查看的会话ID（因为加载所有记录）
+        currentViewingSessionId = null;
+        
         // 禁用刷新按钮，防止重复点击
         refreshButton.setDisable(true);
         statusLabel.setText("正在加载数据...");
@@ -1077,10 +1094,11 @@ public class HistoryController {
                         // 清空旧数据
                         historyData.clear();
                         
-                        // 转换并添加数据
+                        // 转换并添加数据，ID从1开始重新编号
+                        int displayId = 1;
                         for (DatabaseService.TrafficRecord record : records) {
                             TrafficRecordDisplay display = new TrafficRecordDisplay(
-                                record.getId(),
+                                (long) displayId,  // 使用重新编号的ID
                                 record.getIfaceName(),
                                 record.getDownSpeed(),
                                 record.getUpSpeed(),
@@ -1090,6 +1108,7 @@ public class HistoryController {
                                 formatTimestamp(record.getCaptureTime())
                             );
                             historyData.add(display);
+                            displayId++;
                         }
                         
                         // 更新状态标签

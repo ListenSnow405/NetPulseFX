@@ -27,6 +27,15 @@ public class IPLocationInfo {
     /** 国家代码 */
     private final String countryCode;
     
+    /** 风险评分（0-100，分数越高风险越大） */
+    private final Integer riskScore;
+    
+    /** 网络类型（如：IDC、ISP、住宅等） */
+    private final String networkType;
+    
+    /** ASN编号 */
+    private final String asn;
+    
     /** 是否查询成功 */
     private final boolean success;
     
@@ -34,7 +43,36 @@ public class IPLocationInfo {
     private final String errorMessage;
     
     /**
-     * 成功查询的构造函数
+     * 成功查询的构造函数（完整版，包含风险评分和网络类型）
+     * 
+     * @param ip IP 地址
+     * @param country 国家
+     * @param city 城市
+     * @param isp ISP
+     * @param region 地区/省份
+     * @param countryCode 国家代码
+     * @param riskScore 风险评分（0-100）
+     * @param networkType 网络类型（如：IDC、ISP、住宅等）
+     * @param asn ASN编号
+     */
+    public IPLocationInfo(String ip, String country, String city, String isp, 
+                         String region, String countryCode, Integer riskScore, 
+                         String networkType, String asn) {
+        this.ip = ip;
+        this.country = country != null ? country : "未知";
+        this.city = city != null ? city : "未知";
+        this.isp = isp != null ? isp : "未知";
+        this.region = region != null ? region : "未知";
+        this.countryCode = countryCode != null ? countryCode : "未知";
+        this.riskScore = riskScore;
+        this.networkType = networkType != null ? networkType : "未知";
+        this.asn = asn != null ? asn : "未知";
+        this.success = true;
+        this.errorMessage = null;
+    }
+    
+    /**
+     * 成功查询的构造函数（兼容旧版本，风险评分和网络类型设为null）
      * 
      * @param ip IP 地址
      * @param country 国家
@@ -45,14 +83,7 @@ public class IPLocationInfo {
      */
     public IPLocationInfo(String ip, String country, String city, String isp, 
                          String region, String countryCode) {
-        this.ip = ip;
-        this.country = country != null ? country : "未知";
-        this.city = city != null ? city : "未知";
-        this.isp = isp != null ? isp : "未知";
-        this.region = region != null ? region : "未知";
-        this.countryCode = countryCode != null ? countryCode : "未知";
-        this.success = true;
-        this.errorMessage = null;
+        this(ip, country, city, isp, region, countryCode, null, null, null);
     }
     
     /**
@@ -68,6 +99,9 @@ public class IPLocationInfo {
         this.isp = "未知";
         this.region = "未知";
         this.countryCode = "未知";
+        this.riskScore = null;
+        this.networkType = "未知";
+        this.asn = "未知";
         this.success = false;
         this.errorMessage = errorMessage;
     }
@@ -105,6 +139,18 @@ public class IPLocationInfo {
     
     public String getCountryCode() {
         return countryCode;
+    }
+    
+    public Integer getRiskScore() {
+        return riskScore;
+    }
+    
+    public String getNetworkType() {
+        return networkType;
+    }
+    
+    public String getAsn() {
+        return asn;
     }
     
     public boolean isSuccess() {
