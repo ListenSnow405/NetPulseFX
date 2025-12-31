@@ -13,9 +13,10 @@ module com.netpulse.netpulsefx {
     
     // Pcap4j 库依赖（自动模块，基于 artifactId）
     requires org.pcap4j.core;
-    // 注意：packetfactory-static 暂时注释，因为自动模块名解析问题
-    // 对于基本的网卡探测功能，core 模块已经足够
-    // requires org.pcap4j.packetfactory.static_;
+    // packetfactory-static 用于解析数据包（提取IP地址）
+    // 注意：由于 'static' 是 Java 关键字，不能直接用作模块名
+    // 如果 pcap4j-packetfactory-static 不是模块化的，将通过类路径访问
+    // 如果需要，可以尝试使用引号或检查实际的模块名
     
     // SLF4J 日志实现：解决 SLF4J 警告
     requires org.slf4j.simple;

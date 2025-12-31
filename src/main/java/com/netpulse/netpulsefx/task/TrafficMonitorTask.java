@@ -3,8 +3,11 @@ package com.netpulse.netpulsefx.task;
 import javafx.concurrent.Task;
 import org.pcap4j.core.*;
 import org.pcap4j.packet.Packet;
+import org.pcap4j.packet.IpPacket;
 
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Map;
 
 /**
  * 流量监控任务类
@@ -32,6 +35,19 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     private final AtomicLong bytesCaptured;
     
+    /** 
+     * IP 地址统计：用于存储最近捕获的数据包的IP地址信息
+     * Key: IP地址字符串, Value: 出现次数
+     * 使用 ConcurrentHashMap 确保线程安全
+     */
+    private final Map<String, Integer> ipAddressCounts;
+    
+    /** 最近捕获的源IP地址（用于传递给数据库） */
+    private volatile String lastSourceIp;
+    
+    /** 最近捕获的目标IP地址（用于传递给数据库） */
+    private volatile String lastDestIp;
+    
     /** Pcap 句柄：用于数据包捕获 */
     private PcapHandle pcapHandle;
     
@@ -46,6 +62,9 @@ public class TrafficMonitorTask extends Task<Void> {
     public TrafficMonitorTask(PcapNetworkInterface networkInterface) {
         this.networkInterface = networkInterface;
         this.bytesCaptured = new AtomicLong(0);
+        this.ipAddressCounts = new ConcurrentHashMap<>();
+        this.lastSourceIp = null;
+        this.lastDestIp = null;
         this.monitoringActive = false;
     }
     
@@ -90,6 +109,9 @@ public class TrafficMonitorTask extends Task<Void> {
                     // 使用原子操作累加字节数
                     // addAndGet() 是原子操作，确保线程安全
                     bytesCaptured.addAndGet(packetLength);
+                    
+                    // 尝试提取IP地址信息
+                    extractIpAddresses(packet);
                 }
             };
             
@@ -173,6 +195,142 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     public boolean isMonitoringActive() {
         return monitoringActive;
+    }
+    
+    /**
+     * 从数据包中提取IP地址信息
+     * 
+     * <p>支持 IPv4 和 IPv6 数据包。</p>
+     * 
+     * @param packet 数据包对象
+     */
+    private void extractIpAddresses(Packet packet) {
+        try {
+            // 尝试获取 IP 数据包（可能是 IPv4 或 IPv6）
+            IpPacket ipPacket = packet.get(IpPacket.class);
+            
+            if (ipPacket != null) {
+                // 获取源IP地址
+                String sourceIp = ipPacket.getHeader().getSrcAddr().getHostAddress();
+                // 获取目标IP地址
+                String destIp = ipPacket.getHeader().getDstAddr().getHostAddress();
+                
+                // 只保存公网IP地址（过滤掉本地/私有IP）
+                // 优先保存公网IP，如果都是私有IP则保存第一个
+                if (isPublicIP(sourceIp)) {
+                    lastSourceIp = sourceIp;
+                } else if (lastSourceIp == null) {
+                    lastSourceIp = sourceIp; // 如果没有公网IP，至少保存一个
+                }
+                
+                if (isPublicIP(destIp)) {
+                    lastDestIp = destIp;
+                } else if (lastDestIp == null) {
+                    lastDestIp = destIp; // 如果没有公网IP，至少保存一个
+                }
+                
+                // 统计IP地址出现次数（可选，用于分析）
+                ipAddressCounts.merge(sourceIp, 1, Integer::sum);
+                ipAddressCounts.merge(destIp, 1, Integer::sum);
+            }
+        } catch (Exception e) {
+            // 如果数据包不是IP数据包或解析失败，忽略错误
+            // 这很常见，因为可能捕获到ARP、ICMP等其他类型的包
+            // 不记录错误，避免日志过多
+        }
+    }
+    
+    /**
+     * 检查是否为公网IP地址
+     * 
+     * @param ip IP地址
+     * @return true 如果是公网IP
+     */
+    private boolean isPublicIP(String ip) {
+        if (ip == null || ip.isEmpty()) {
+            return false;
+        }
+        
+        // 回环地址
+        if (ip.equals("127.0.0.1") || ip.startsWith("127.")) {
+            return false;
+        }
+        
+        // 本地链路地址
+        if (ip.startsWith("169.254.")) {
+            return false;
+        }
+        
+        // 私有地址范围
+        // 10.0.0.0 - 10.255.255.255
+        if (ip.startsWith("10.")) {
+            return false;
+        }
+        
+        // 172.16.0.0 - 172.31.255.255
+        if (ip.matches("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*")) {
+            return false;
+        }
+        
+        // 192.168.0.0 - 192.168.255.255
+        if (ip.startsWith("192.168.")) {
+            return false;
+        }
+        
+        // IPv6 本地地址
+        if (ip.startsWith("::1") || ip.startsWith("fe80:")) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * 获取最近捕获的源IP地址
+     * 
+     * @return 源IP地址，如果未捕获到IP数据包则返回null
+     */
+    public String getLastSourceIp() {
+        return lastSourceIp;
+    }
+    
+    /**
+     * 获取最近捕获的目标IP地址
+     * 
+     * @return 目标IP地址，如果未捕获到IP数据包则返回null
+     */
+    public String getLastDestIp() {
+        return lastDestIp;
+    }
+    
+    /**
+     * 获取并清空最近捕获的IP地址（原子操作）
+     * 
+     * <p>用于在读取IP地址后清空，避免重复使用旧数据。</p>
+     * 
+     * @return 包含源IP和目标IP的数组，[0]为源IP，[1]为目标IP
+     */
+    public String[] getAndClearLastIps() {
+        String[] result = new String[]{lastSourceIp, lastDestIp};
+        lastSourceIp = null;
+        lastDestIp = null;
+        return result;
+    }
+    
+    /**
+     * 获取IP地址统计信息（用于调试或分析）
+     * 
+     * @return IP地址出现次数的映射（只读副本）
+     */
+    public Map<String, Integer> getIpAddressCounts() {
+        return new ConcurrentHashMap<>(ipAddressCounts);
+    }
+    
+    /**
+     * 清空IP地址统计
+     */
+    public void clearIpAddressCounts() {
+        ipAddressCounts.clear();
     }
 }
 

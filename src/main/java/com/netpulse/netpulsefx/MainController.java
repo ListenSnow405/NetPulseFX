@@ -627,11 +627,26 @@ public class MainController {
             // 如果需要区分上行和下行，需要在 TrafficMonitorTask 中分别统计
             // 由于当前的 TrafficMonitorTask 只统计总流量，这里将下行和上行都设置为相同值
             // 未来可以根据需要扩展 TrafficMonitorTask 来区分方向
+            
+            // 获取最近捕获的IP地址信息
+            String[] lastIps = trafficMonitorTask.getAndClearLastIps();
+            String sourceIp = lastIps[0];
+            String destIp = lastIps[1];
+            
+            // 调试信息：打印捕获的IP地址
+            if (sourceIp != null || destIp != null) {
+                System.out.println("[MainController] 捕获到IP地址 - 源IP: " + 
+                    (sourceIp != null ? sourceIp : "无") + 
+                    ", 目标IP: " + (destIp != null ? destIp : "无"));
+            }
+            
             if (currentMonitoringInterfaceName != null && databaseService != null) {
                 databaseService.saveTrafficDataAsync(
                         currentMonitoringInterfaceName,
                         kbPerSecond,  // 下行速度（当前为总流量）
-                        kbPerSecond   // 上行速度（当前为总流量，未来可扩展为分别统计）
+                        kbPerSecond,  // 上行速度（当前为总流量，未来可扩展为分别统计）
+                        sourceIp,     // 源IP地址
+                        destIp        // 目标IP地址
                 ).exceptionally(e -> {
                     // 数据库保存失败时，只记录错误，不影响 UI 显示
                     System.err.println("[MainController] 保存流量数据到数据库失败: " + e.getMessage());
