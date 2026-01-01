@@ -345,6 +345,7 @@ public class HelpController implements Initializable {
         DOCUMENT_NAME_MAP.put("README.md", "NetPulse FX - 使用指南");
         DOCUMENT_NAME_MAP.put("AI_CONFIG.md", "AI 服务配置说明");
         DOCUMENT_NAME_MAP.put("AI_SERVICE_USAGE.md", "AI 流量分析服务使用指南");
+        DOCUMENT_NAME_MAP.put("PROMPT_ENGINEERING.md", "AI 提示词工程文档");
         DOCUMENT_NAME_MAP.put("IP_LOCATION_FEATURE.md", "IP 归属地查询功能使用说明");
         DOCUMENT_NAME_MAP.put("PROCESS_TRAFFIC_MONITOR.md", "进程流量监控面板功能说明");
         
@@ -352,6 +353,7 @@ public class HelpController implements Initializable {
         DOCUMENT_ORDER.add("README.md");
         DOCUMENT_ORDER.add("AI_CONFIG.md");
         DOCUMENT_ORDER.add("AI_SERVICE_USAGE.md");
+        DOCUMENT_ORDER.add("PROMPT_ENGINEERING.md");
         DOCUMENT_ORDER.add("IP_LOCATION_FEATURE.md");
         DOCUMENT_ORDER.add("PROCESS_TRAFFIC_MONITOR.md");
     }

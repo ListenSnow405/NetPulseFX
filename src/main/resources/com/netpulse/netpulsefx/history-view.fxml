@@ -208,6 +208,14 @@
                                     <Insets left="10.0"/>
                                 </HBox.margin>
                             </Button>
+                            <Button fx:id="viewSystemPromptButton" text="查看系统 Prompt" 
+                                    onAction="#onViewSystemPromptClick"
+                                    style="-fx-pref-width: 160px; -fx-background-color: #9C27B0; -fx-text-fill: white;"
+                                    visible="false" managed="false">
+                                <HBox.margin>
+                                    <Insets left="10.0"/>
+                                </HBox.margin>
+                            </Button>
                             <Button fx:id="cancelAIDiagnosisButton" text="取消诊断" 
                                     onAction="#onCancelAIDiagnosisClick"
                                     style="-fx-pref-width: 100px; -fx-background-color: #ff9800; -fx-text-fill: white;"

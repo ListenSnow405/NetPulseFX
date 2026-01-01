@@ -17,6 +17,7 @@
           <include>README.md</include>
           <include>AI_CONFIG.md</include>
           <include>AI_SERVICE_USAGE.md</include>
+          <include>PROMPT_ENGINEERING.md</include>
           <include>IP_LOCATION_FEATURE.md</include>
           <include>PROCESS_TRAFFIC_MONITOR.md</include>
         </includes>

@@ -32,8 +32,10 @@ import javafx.scene.layout.VBox;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.BorderPane;
 import javafx.geometry.Pos;
 import javafx.geometry.Insets;
+import javafx.scene.Scene;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
@@ -323,6 +325,10 @@ public class HistoryController {
     @FXML
     private Button openReportWindowButton;
     
+    /** 查看系统 Prompt 按钮 */
+    @FXML
+    private Button viewSystemPromptButton;
+    
     /** 导出 Excel 按钮 */
     @FXML
     private Button exportExcelButton;
@@ -382,6 +388,9 @@ public class HistoryController {
     
     /** 当前正在查看的会话ID（如果正在查看详细记录） */
     private Integer currentViewingSessionId;
+    
+    /** 当前正在查询的IP地址（用于重新查询） */
+    private String currentQueryingIp;
     
     /** 当前正在加载的会话ID（用于防抖处理，取消之前的任务） */
     private final AtomicReference<Integer> currentLoadingSessionId = new AtomicReference<>(null);
@@ -865,6 +874,10 @@ public class HistoryController {
                         openReportWindowButton.setVisible(true);
                         openReportWindowButton.setManaged(true);
                     }
+                    if (viewSystemPromptButton != null) {
+                        viewSystemPromptButton.setVisible(true);
+                        viewSystemPromptButton.setManaged(true);
+                    }
                     aiDiagnosisButton.setDisable(false);
                     statusLabel.setText("AI 诊断完成");
                     currentDiagnosisTask = null;
@@ -929,6 +942,10 @@ public class HistoryController {
         if (openReportWindowButton != null) {
             openReportWindowButton.setVisible(false);
             openReportWindowButton.setManaged(false);
+        }
+        if (viewSystemPromptButton != null) {
+            viewSystemPromptButton.setVisible(false);
+            viewSystemPromptButton.setManaged(false);
         }
         aiDiagnosisButton.setDisable(false);
         statusLabel.setText("AI 诊断失败");
@@ -1233,6 +1250,183 @@ public class HistoryController {
         exportThread.start();
         
         statusLabel.setText("正在导出 PDF 文件...");
+    }
+    
+    /**
+     * 查看系统 Prompt 按钮点击事件
+     * 显示发送给 AI 的完整 Prompt（System Prompt + User Prompt）
+     */
+    @FXML
+    private void onViewSystemPromptClick() {
+        // 检查是否有选中的会话
+        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
+        if (selectedSession == null) {
+            showAlert(Alert.AlertType.WARNING, "未选择会话", 
+                "请先选择一个监控会话。");
+            return;
+        }
+        
+        // 检查 AI 服务是否可用
+        if (aiService == null) {
+            showAlert(Alert.AlertType.WARNING, "AI 服务未配置", 
+                "AI 服务未初始化，无法生成 Prompt。\n\n请先在主界面配置 API 参数。");
+            return;
+        }
+        
+        // 异步查询会话和记录数据
+        Task<String> promptTask = new Task<String>() {
+            @Override
+            protected String call() throws Exception {
+                int sessionId = selectedSession.getSessionId();
+                
+                // 查询会话信息
+                updateMessage("正在查询会话信息...");
+                List<DatabaseService.MonitoringSession> sessions = databaseService.getAllSessions().get();
+                DatabaseService.MonitoringSession session = sessions.stream()
+                        .filter(s -> s.getSessionId() == sessionId)
+                        .findFirst()
+                        .orElse(null);
+                
+                if (session == null) {
+                    throw new Exception("会话不存在: session_id=" + sessionId);
+                }
+                
+                // 查询该会话的所有记录
+                updateMessage("正在查询流量明细记录...");
+                List<DatabaseService.TrafficRecord> records = databaseService.getRecordsBySession(sessionId).get();
+                
+                if (records == null || records.isEmpty()) {
+                    throw new Exception("该会话没有流量明细记录，无法生成 Prompt。");
+                }
+                
+                // 生成完整的 Prompt
+                updateMessage("正在生成 Prompt...");
+                return aiService.getFullPrompt(session, records);
+            }
+        };
+        
+        // 任务成功完成
+        promptTask.setOnSucceeded(e -> {
+            try {
+                String fullPrompt = promptTask.getValue();
+                
+                Platform.runLater(() -> {
+                    // 创建独立窗口显示 Prompt
+                    showSystemPromptWindow(fullPrompt);
+                });
+            } catch (Exception ex) {
+                Platform.runLater(() -> {
+                    showAlert(Alert.AlertType.ERROR, "生成 Prompt 失败", 
+                        "生成 Prompt 时发生错误：\n" + ex.getMessage());
+                });
+            }
+        });
+        
+        // 任务失败
+        promptTask.setOnFailed(e -> {
+            Throwable exception = promptTask.getException();
+            Platform.runLater(() -> {
+                String errorMsg = exception != null ? exception.getMessage() : "未知错误";
+                showAlert(Alert.AlertType.ERROR, "生成 Prompt 失败", 
+                    "无法生成 Prompt：\n" + errorMsg);
+            });
+        });
+        
+        // 启动任务
+        Thread promptThread = new Thread(promptTask);
+        promptThread.setDaemon(true);
+        promptThread.start();
+    }
+    
+    /**
+     * 显示系统 Prompt 独立窗口
+     * 
+     * @param promptContent Prompt 内容
+     */
+    private void showSystemPromptWindow(String promptContent) {
+        // 创建新窗口
+        Stage promptStage = new Stage();
+        promptStage.setTitle("系统 Prompt - 开发者模式");
+        promptStage.setMinWidth(900);
+        promptStage.setMinHeight(600);
+        
+        // 创建 BorderPane 布局
+        BorderPane root = new BorderPane();
+        
+        // 创建工具栏
+        HBox toolbar = new HBox(10);
+        toolbar.setPadding(new Insets(10));
+        toolbar.setAlignment(Pos.CENTER_RIGHT);
+        toolbar.setStyle("-fx-background-color: #f5f5f5;");
+        
+        // 创建复制按钮
+        Button copyButton = new Button("复制全文");
+        copyButton.setPrefWidth(120);
+        copyButton.setPrefHeight(35);
+        copyButton.setStyle(
+            "-fx-background-color: #4CAF50; " +
+            "-fx-text-fill: white; " +
+            "-fx-font-size: 13px; " +
+            "-fx-font-weight: bold; " +
+            "-fx-background-radius: 5px; " +
+            "-fx-border-radius: 5px; " +
+            "-fx-cursor: hand;"
+        );
+        copyButton.setOnAction(e -> {
+            // 复制到剪贴板
+            javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
+            javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+            content.putString(promptContent);
+            clipboard.setContent(content);
+            
+            // 显示成功提示
+            showAlert(Alert.AlertType.INFORMATION, "复制成功", "Prompt 内容已复制到剪贴板。");
+        });
+        
+        // 添加悬停效果
+        copyButton.setOnMouseEntered(e -> copyButton.setStyle(
+            "-fx-background-color: #45a049; " +
+            "-fx-text-fill: white; " +
+            "-fx-font-size: 13px; " +
+            "-fx-font-weight: bold; " +
+            "-fx-background-radius: 5px; " +
+            "-fx-border-radius: 5px; " +
+            "-fx-cursor: hand;"
+        ));
+        copyButton.setOnMouseExited(e -> copyButton.setStyle(
+            "-fx-background-color: #4CAF50; " +
+            "-fx-text-fill: white; " +
+            "-fx-font-size: 13px; " +
+            "-fx-font-weight: bold; " +
+            "-fx-background-radius: 5px; " +
+            "-fx-border-radius: 5px; " +
+            "-fx-cursor: hand;"
+        ));
+        
+        toolbar.getChildren().add(copyButton);
+        
+        // 创建 TextArea 显示 Prompt 内容
+        TextArea promptTextArea = new TextArea(promptContent);
+        promptTextArea.setEditable(false);
+        promptTextArea.setWrapText(true);
+        promptTextArea.setStyle(
+            "-fx-font-family: 'Consolas', 'Monaco', 'Courier New', monospace; " +
+            "-fx-font-size: 12px; " +
+            "-fx-background-color: #fafafa; " +
+            "-fx-border-color: #e0e0e0;"
+        );
+        
+        // 设置布局
+        root.setTop(toolbar);
+        root.setCenter(promptTextArea);
+        
+        // 创建场景
+        Scene scene = new Scene(root, 1000, 700);
+        promptStage.setScene(scene);
+        
+        // 显示窗口（非模态）
+        promptStage.show();
+        promptStage.toFront(); // 将窗口置于前台
     }
     
     /**
@@ -1813,6 +2007,9 @@ public class HistoryController {
      * @param ip IP 地址
      */
     private void queryIPLocation(String ip) {
+        // 保存当前查询的IP地址，用于重新查询
+        currentQueryingIp = ip;
+        
         // 禁用查询按钮，防止重复点击
         queryIpButton.setDisable(true);
         ipQueryStatusLabel.setText("正在查询 IP: " + ip + "...");
@@ -1830,7 +2027,7 @@ public class HistoryController {
                     } else {
                         // 查询失败
                         String errorMsg = locationInfo.getErrorMessage();
-                        displayIpLocationError(errorMsg);
+                        displayIpLocationError(ip, errorMsg);
                         ipQueryStatusLabel.setText("查询失败 - " + (errorMsg != null ? errorMsg : "未知原因"));
                     }
                     
@@ -1841,7 +2038,7 @@ public class HistoryController {
             .exceptionally(throwable -> {
                 // 处理异常
                 Platform.runLater(() -> {
-                    displayIpLocationError("查询过程中发生异常: " + 
+                    displayIpLocationError(ip, "查询过程中发生异常: " + 
                         (throwable.getMessage() != null ? throwable.getMessage() : "未知错误"));
                     ipQueryStatusLabel.setText("查询异常");
                     queryIpButton.setDisable(false);
@@ -1950,16 +2147,76 @@ public class HistoryController {
     
     /**
      * 显示IP归属地错误信息
+     * 
+     * @param ip 查询的IP地址
+     * @param errorMsg 错误消息
      */
-    private void displayIpLocationError(String errorMsg) {
+    private void displayIpLocationError(String ip, String errorMsg) {
         if (ipLocationInfoBox == null) return;
         
         ipLocationInfoBox.getChildren().clear();
         
+        // 构建API URL
+        String apiUrl = "https://api.vore.top/api/IPdata?ip=" + ip;
+        
+        // 错误消息标签
         Label errorLabel = new Label("查询失败\n\n" + errorMsg);
         errorLabel.setWrapText(true);
-        errorLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #DC3545; -fx-padding: 10px;");
+        errorLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #DC3545; -fx-padding: 5px 10px 10px 10px;");
         ipLocationInfoBox.getChildren().add(errorLabel);
+        
+        // API URL 标签
+        Label urlLabel = new Label("API 地址：");
+        urlLabel.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: #666; -fx-padding: 10px 10px 5px 10px;");
+        ipLocationInfoBox.getChildren().add(urlLabel);
+        
+        // URL 文本框和复制按钮
+        TextField urlTextField = new TextField(apiUrl);
+        urlTextField.setEditable(false);
+        urlTextField.setStyle("-fx-font-size: 11px; -fx-background-color: #f5f5f5; -fx-border-color: #ddd; -fx-border-radius: 3px;");
+        urlTextField.setOnMouseClicked(e -> urlTextField.selectAll());
+        HBox.setHgrow(urlTextField, javafx.scene.layout.Priority.ALWAYS);
+        
+        Button copyUrlButton = new Button("复制");
+        copyUrlButton.setStyle("-fx-font-size: 11px; -fx-background-color: #28a745; -fx-text-fill: white; -fx-cursor: hand;");
+        copyUrlButton.setOnAction(e -> {
+            javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
+            javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+            content.putString(apiUrl);
+            clipboard.setContent(content);
+            copyUrlButton.setText("已复制");
+            copyUrlButton.setStyle("-fx-font-size: 11px; -fx-background-color: #6c757d; -fx-text-fill: white;");
+            // 1秒后恢复按钮文本
+            new java.util.Timer().schedule(new java.util.TimerTask() {
+                @Override
+                public void run() {
+                    Platform.runLater(() -> {
+                        copyUrlButton.setText("复制");
+                        copyUrlButton.setStyle("-fx-font-size: 11px; -fx-background-color: #28a745; -fx-text-fill: white;");
+                    });
+                }
+            }, 1000);
+        });
+        
+        HBox urlBox = new HBox(5, urlTextField, copyUrlButton);
+        urlBox.setPadding(new Insets(0, 10, 10, 10));
+        urlBox.setAlignment(Pos.CENTER_LEFT);
+        ipLocationInfoBox.getChildren().add(urlBox);
+        
+        // 重新抓取按钮
+        Button retryButton = new Button("重新抓取");
+        retryButton.setStyle("-fx-font-size: 12px; -fx-background-color: #0078D7; -fx-text-fill: white; -fx-cursor: hand;");
+        retryButton.setOnAction(e -> {
+            if (currentQueryingIp != null && !currentQueryingIp.trim().isEmpty()) {
+                // 移除该IP的缓存，强制重新查询
+                ipLocationService.removeFromCache(currentQueryingIp);
+                queryIPLocation(currentQueryingIp);
+            }
+        });
+        HBox buttonBox = new HBox(10, retryButton);
+        buttonBox.setPadding(new Insets(0, 10, 10, 10));
+        buttonBox.setAlignment(Pos.CENTER_LEFT);
+        ipLocationInfoBox.getChildren().add(buttonBox);
     }
     
     // ========== 核心业务方法 ==========

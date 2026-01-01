@@ -792,6 +792,19 @@ public class IPLocationService {
     }
     
     /**
+     * 移除指定 IP 的缓存
+     * 用于强制重新查询指定 IP 的场景
+     * 
+     * @param ip IP 地址
+     */
+    public void removeFromCache(String ip) {
+        if (ip != null && !ip.trim().isEmpty()) {
+            cache.remove(ip.trim());
+            System.out.println("[IPLocationService] 已移除IP缓存: " + ip.trim());
+        }
+    }
+    
+    /**
      * 获取缓存大小
      * 
      * @return 缓存中 IP 数量

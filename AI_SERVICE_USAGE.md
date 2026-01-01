@@ -23,7 +23,7 @@ NetPulse FX 集成了 AI 流量分析助手，可以智能分析网络流量数�
 
 **功能特性：**
 - 使用 Java 21 原生 HttpClient 进行异步 API 调用
-- 支持多种 AI API 提供商（DeepSeek、OpenAI、Ollama）
+- 支持多种 AI API 提供商（DeepSeek、OpenAI、Ollama、Google Gemini）
 - 自动格式化流量数据为 JSON
 - 完善的错误处理和超时控制
 - 不阻塞 UI 线程
@@ -33,13 +33,19 @@ NetPulse FX 集成了 AI 流量分析助手，可以智能分析网络流量数�
 
 用于配置 AI API 的连接信息。
 
+**支持的提供商：**
+- **DeepSeek**: 使用 `AIConfig.defaultDeepSeek()` 创建配置
+- **OpenAI**: 使用 `AIConfig.defaultOpenAI()` 创建配置，默认使用 `gpt-4o` 模型
+- **Ollama（本地）**: 使用 `AIConfig.defaultOllama()` 创建配置，需要本地运行 Ollama 服务
+- **Google Gemini**: 使用 `AIConfig.defaultGemini()` 创建配置，默认使用 `gemini-2.5-flash` 模型
+
 ## 使用方法
 
 ### 在 Controller 中调用 AI 服务
 
 ```java
 // 1. 初始化 AI 服务
-AIConfig config = AIConfig.defaultOllama();  // 或使用其他提供商
+AIConfig config = AIConfig.defaultOllama();  // 或使用其他提供商（DeepSeek、OpenAI、Gemini）
 AIService aiService = new AIService(config);
 
 // 2. 准备流量数据
@@ -154,6 +160,9 @@ AI 服务会自动处理以下常见错误：
 2. **API 密钥错误**：提示检查 API 密钥
 3. **网络连接失败**：提示检查网络和 API 端点
 4. **API 响应格式错误**：显示详细的错误信息
+5. **Gemini 特定错误**：
+   - 安全过滤错误（SAFETY）：内容被 Gemini 的安全过滤器拦截
+   - 引用限制错误（RECITATION）：内容涉及版权或引用限制
 
 ## UI 集成
 

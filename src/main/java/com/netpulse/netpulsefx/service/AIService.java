@@ -1261,6 +1261,67 @@ public class AIService {
      * 使用指定的 System Prompt 构建请求体
      */
     /**
+     * 获取完整的 Prompt（System Prompt + User Prompt）
+     * 用于开发者模式和演示功能
+     * 
+     * @param session 监控会话对象
+     * @param records 流量明细记录列表
+     * @return 完整的 Prompt 字符串
+     */
+    public String getFullPrompt(MonitoringSession session, List<TrafficRecord> records) {
+        if (session == null || records == null || records.isEmpty()) {
+            return "**错误：无法生成 Prompt，缺少必要的会话或记录数据**";
+        }
+        
+        try {
+            // 对记录进行降采样
+            List<TrafficRecord> sampledRecords = downsampleRecords(records, 100);
+            
+            // 构建会话概况信息
+            String sessionOverview = buildSessionOverview(session, records);
+            
+            // 格式化采样数据
+            String sampledDataJson = formatSampledRecordsToJson(sampledRecords);
+            
+            // 构建用户提示词
+            String userPrompt = buildSessionAnalysisPrompt(sessionOverview, sampledDataJson, records.size(), sampledRecords.size());
+            
+            // 组合完整的 Prompt
+            return String.format(
+                """
+                ========================================
+                System Prompt（系统提示词）
+                ========================================
+                
+                %s
+                
+                ========================================
+                User Prompt（用户提示词）
+                ========================================
+                
+                %s
+                
+                ========================================
+                完整 Prompt（发送给 AI 的完整指令）
+                ========================================
+                
+                System Prompt:
+                %s
+                
+                User Prompt:
+                %s
+                """,
+                SESSION_ANALYSIS_SYSTEM_PROMPT,
+                userPrompt,
+                SESSION_ANALYSIS_SYSTEM_PROMPT,
+                userPrompt
+            );
+        } catch (Exception e) {
+            return "**错误：生成 Prompt 时发生异常**\n\n" + e.getMessage();
+        }
+    }
+    
+    /**
      * 构建带系统提示词的请求体（用于会话分析）
      */
     private String buildRequestBodyWithSystemPrompt(String userPrompt, String systemPrompt) {
