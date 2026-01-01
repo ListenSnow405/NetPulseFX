@@ -269,11 +269,11 @@ public class MainController {
     /** 总流量（MB） */
     private double totalTrafficMB = 0.0;
     
-    /** 应用启动时间 */
-    private long appStartTime;
+    /** 监控会话开始时间（毫秒时间戳） */
+    private long sessionStartTime = 0;
     
-    /** 运行时间更新任务的 Future */
-    private ScheduledFuture<?> uptimeUpdateFuture;
+    /** 会话运行时间更新 Timeline */
+    private javafx.animation.Timeline sessionTimeline;
     
     // ========== 初始化方法 ==========
     
@@ -461,16 +461,6 @@ public class MainController {
      * 初始化状态栏
      */
     private void initializeStatusBar() {
-        appStartTime = System.currentTimeMillis();
-        
-        // 更新运行时间（每秒更新一次）
-        uptimeUpdateFuture = scheduler.scheduleAtFixedRate(
-            this::updateUptime,
-            1,
-            1,
-            TimeUnit.SECONDS
-        );
-        
         // 初始化状态显示
         if (uptimeLabel != null) uptimeLabel.setText("00:00:00");
         if (aiStatusLabel != null) {
@@ -489,20 +479,76 @@ public class MainController {
     }
     
     /**
-     * 更新运行时间显示
+     * 更新运行时间显示（监控会话持续时间）
      */
     private void updateUptime() {
-        long elapsed = System.currentTimeMillis() - appStartTime;
+        if (sessionStartTime == 0) {
+            // 如果会话未开始，显示 00:00:00
+            if (uptimeLabel != null) {
+                uptimeLabel.setText("00:00:00");
+            }
+            return;
+        }
+        
+        long elapsed = System.currentTimeMillis() - sessionStartTime;
         long seconds = elapsed / 1000;
         long hours = seconds / 3600;
         long minutes = (seconds % 3600) / 60;
         long secs = seconds % 60;
         
-        Platform.runLater(() -> {
-            if (uptimeLabel != null) {
-                uptimeLabel.setText(String.format("%02d:%02d:%02d", hours, minutes, secs));
-            }
-        });
+        if (uptimeLabel != null) {
+            uptimeLabel.setText(String.format("%02d:%02d:%02d", hours, minutes, secs));
+        }
+    }
+    
+    /**
+     * 启动会话计时器
+     * 在开始监控时调用
+     */
+    private void startSessionTimer() {
+        // 记录会话开始时间
+        sessionStartTime = System.currentTimeMillis();
+        
+        // 停止之前的计时器（如果存在）
+        stopSessionTimer();
+        
+        // 创建 Timeline，每秒更新一次
+        sessionTimeline = new javafx.animation.Timeline(
+            new javafx.animation.KeyFrame(
+                javafx.util.Duration.seconds(1),
+                e -> updateUptime()
+            )
+        );
+        sessionTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        sessionTimeline.play();
+        
+        // 立即更新一次显示
+        updateUptime();
+    }
+    
+    /**
+     * 停止会话计时器
+     * 在停止监控时调用
+     * 停止后，运行时间显示会停留在停止时的数值
+     */
+    private void stopSessionTimer() {
+        if (sessionTimeline != null) {
+            sessionTimeline.stop();
+            sessionTimeline = null;
+        }
+        // 注意：不重置 sessionStartTime，保持显示停止时的数值
+        // 下次开始监控时，startSessionTimer() 会重新设置 sessionStartTime
+    }
+    
+    /**
+     * 重置会话计时器显示
+     * 在开始新的监控会话前调用，将显示重置为 00:00:00
+     */
+    private void resetSessionTimerDisplay() {
+        sessionStartTime = 0;
+        if (uptimeLabel != null) {
+            uptimeLabel.setText("00:00:00");
+        }
     }
     
     /**
@@ -2027,6 +2073,10 @@ public class MainController {
                         
                         // 启动定时更新任务
                         Platform.runLater(() -> {
+                            // 重置并启动会话计时器（开始新的监控会话）
+                            resetSessionTimerDisplay();
+                            startSessionTimer();
+                            
                             // 启动定时更新任务
                             // 每秒执行一次，读取流量数据并更新图表
                             updateTaskFuture = scheduler.scheduleAtFixedRate(
@@ -2244,11 +2294,8 @@ public class MainController {
             processTrafficUpdateFuture = null;
         }
         
-        // 取消运行时间更新任务
-        if (uptimeUpdateFuture != null && !uptimeUpdateFuture.isCancelled()) {
-            uptimeUpdateFuture.cancel(false);
-            uptimeUpdateFuture = null;
-        }
+        // 停止会话计时器
+        stopSessionTimer();
         
         // 停止抓包任务
         if (trafficMonitorTask != null) {

@@ -13,16 +13,17 @@ import javafx.scene.control.SplitPane;
 import javafx.scene.web.WebView;
 import javafx.scene.web.WebEngine;
 
-import java.io.File;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.ResourceBundle;
-import java.util.stream.Stream;
 
 /**
  * 帮助中心窗口控制器
@@ -58,11 +59,8 @@ public class HelpController implements Initializable {
     /** WebView 的引擎，用于加载 HTML 内容 */
     private WebEngine webEngine;
     
-    /** 文档文件路径列表（与 documentListView 的索引对应） */
-    private List<Path> documentPaths;
-    
-    /** 项目根目录路径 */
-    private Path projectRoot;
+    /** 文档文件名列表（与 documentListView 的索引对应） */
+    private List<String> documentFileNames;
     
     /**
      * 初始化方法
@@ -76,13 +74,10 @@ public class HelpController implements Initializable {
         // 初始化 WebEngine
         webEngine = contentWebView.getEngine();
         
-        // 获取项目根目录（当前工作目录）
-        projectRoot = Paths.get(System.getProperty("user.dir"));
-        
         // 配置 SplitPane：设置左侧面板固定宽度，分割条不可拖拽
         configureSplitPane();
         
-        // 初始化文档列表
+        // 初始化文档列表（从类路径读取）
         initializeDocumentList();
         
         // 设置列表选择监听器
@@ -141,7 +136,15 @@ public class HelpController implements Initializable {
     
     /**
      * 初始化文档列表
-     * 扫描项目根目录下的所有 .md 文件，并添加到列表中
+     * 从类路径扫描所有 .md 文件，并添加到列表中
+     * 
+     * <p>实现说明：</p>
+     * <ul>
+     *   <li>使用类路径资源扫描，支持 Fat JAR 模式</li>
+     *   <li>通过 ClassLoader 获取所有类路径中的 .md 文件</li>
+     *   <li>排除不需要显示的文档</li>
+     *   <li>按预定义顺序排序</li>
+     * </ul>
      */
     private void initializeDocumentList() {
         // 创建后台任务扫描文档
@@ -150,29 +153,97 @@ public class HelpController implements Initializable {
             protected List<DocumentInfo> call() throws Exception {
                 List<DocumentInfo> documents = new ArrayList<>();
                 
-                // 扫描项目根目录下的所有 .md 文件
-                try (Stream<Path> paths = Files.list(projectRoot)) {
-                    paths.filter(Files::isRegularFile)
-                         .filter(path -> path.toString().toLowerCase().endsWith(".md"))
-                         .filter(path -> {
-                             // 排除不需要显示的文档
-                             String fileName = path.getFileName().toString();
-                             return !EXCLUDED_DOCUMENTS.contains(fileName);
-                         })
-                         .forEach(path -> {
-                             String fileName = path.getFileName().toString();
-                             String displayName = beautifyFileName(fileName);
-                             documents.add(new DocumentInfo(displayName, path));
-                         });
+                // 从类路径扫描所有 .md 文件
+                // 使用 ClassLoader 获取资源，支持 Fat JAR 模式
+                ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+                if (classLoader == null) {
+                    classLoader = HelpController.class.getClassLoader();
+                }
+                
+                // 尝试获取类路径根目录下的所有资源
+                // 注意：在 JAR 文件中，无法直接列出目录内容，所以我们需要使用预定义的文档列表
+                // 然后逐个检查资源是否存在
+                
+                // 使用预定义的文档列表（从 DOCUMENT_ORDER 获取）
+                for (String fileName : DOCUMENT_ORDER) {
+                    // 尝试多种资源路径格式
+                    String[] possiblePaths = {
+                        "/" + fileName,           // 类路径根目录
+                        fileName,                 // 相对路径
+                        "META-INF/resources/" + fileName  // META-INF 资源目录
+                    };
+                    
+                    boolean found = false;
+                    for (String resourcePath : possiblePaths) {
+                        InputStream resourceStream = classLoader.getResourceAsStream(resourcePath);
+                        if (resourceStream != null) {
+                            // 资源存在，添加到列表
+                            resourceStream.close(); // 立即关闭，稍后会重新打开读取
+                            String displayName = beautifyFileName(fileName);
+                            documents.add(new DocumentInfo(displayName, fileName));
+                            System.out.println("[HelpController] 找到文档资源: " + resourcePath + " (文件: " + fileName + ")");
+                            found = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!found) {
+                        System.out.println("[HelpController] 未找到文档资源: " + fileName);
+                        // 尝试使用当前类所在的包路径查找（调试用）
+                        for (String resourcePath : possiblePaths) {
+                            URL resourceUrl = classLoader.getResource(resourcePath);
+                            if (resourceUrl != null) {
+                                System.out.println("[HelpController] 资源 URL: " + resourceUrl);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // 如果预定义列表中没有文档，尝试扫描所有可能的文档
+                if (documents.isEmpty()) {
+                    System.out.println("[HelpController] 预定义列表中没有找到文档，尝试扫描常见文档...");
+                    // 尝试常见的文档名称
+                    String[] commonDocs = {
+                        "README.md", "AI_CONFIG.md", "AI_SERVICE_USAGE.md",
+                        "IP_LOCATION_FEATURE.md", "PROCESS_TRAFFIC_MONITOR.md"
+                    };
+                    
+                    for (String fileName : commonDocs) {
+                        if (EXCLUDED_DOCUMENTS.contains(fileName)) {
+                            continue;
+                        }
+                        
+                        // 尝试多种路径格式
+                        String[] possiblePaths = {
+                            "/" + fileName,           // 类路径根目录
+                            fileName,                 // 相对路径
+                            "META-INF/resources/" + fileName  // META-INF 资源目录
+                        };
+                        
+                        boolean found = false;
+                        for (String resourcePath : possiblePaths) {
+                            InputStream resourceStream = classLoader.getResourceAsStream(resourcePath);
+                            if (resourceStream != null) {
+                                resourceStream.close();
+                                String displayName = beautifyFileName(fileName);
+                                documents.add(new DocumentInfo(displayName, fileName));
+                                System.out.println("[HelpController] 找到文档资源: " + resourcePath + " (文件: " + fileName + ")");
+                                found = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!found) {
+                            System.out.println("[HelpController] 未找到常见文档: " + fileName);
+                        }
+                    }
                 }
                 
                 // 按预定义的顺序排序（README.md 始终在第一位）
                 documents.sort((a, b) -> {
-                    String fileNameA = a.path.getFileName().toString();
-                    String fileNameB = b.path.getFileName().toString();
-                    
-                    int indexA = DOCUMENT_ORDER.indexOf(fileNameA);
-                    int indexB = DOCUMENT_ORDER.indexOf(fileNameB);
+                    int indexA = DOCUMENT_ORDER.indexOf(a.fileName);
+                    int indexB = DOCUMENT_ORDER.indexOf(b.fileName);
                     
                     // 如果都在顺序列表中，按列表顺序排序
                     if (indexA != -1 && indexB != -1) {
@@ -192,12 +263,12 @@ public class HelpController implements Initializable {
         // 任务成功完成后的回调
         scanTask.setOnSucceeded(event -> {
             List<DocumentInfo> documents = scanTask.getValue();
-            documentPaths = new ArrayList<>();
+            documentFileNames = new ArrayList<>();
             ObservableList<String> displayNames = FXCollections.observableArrayList();
             
             for (DocumentInfo doc : documents) {
                 displayNames.add(doc.displayName);
-                documentPaths.add(doc.path);
+                documentFileNames.add(doc.fileName);
             }
             
             documentListView.setItems(displayNames);
@@ -205,6 +276,15 @@ public class HelpController implements Initializable {
             // 如果有文档，默认选择第一个
             if (!displayNames.isEmpty()) {
                 documentListView.getSelectionModel().select(0);
+            } else {
+                // 如果没有找到文档，显示提示信息
+                Platform.runLater(() -> {
+                    documentTitleLabel.setText("未找到文档");
+                    webEngine.loadContent(
+                        "<html><body><p style='color: orange;'>未找到任何文档资源。请确保 Markdown 文档已正确打包到 JAR 文件中。</p></body></html>",
+                        "text/html"
+                    );
+                });
             }
         });
         
@@ -213,12 +293,16 @@ public class HelpController implements Initializable {
             Throwable exception = scanTask.getException();
             System.err.println("[HelpController] 扫描文档失败: " + 
                 (exception != null ? exception.getMessage() : "未知错误"));
+            if (exception != null) {
+                exception.printStackTrace();
+            }
             
             // 显示错误信息
             Platform.runLater(() -> {
                 documentTitleLabel.setText("扫描文档失败");
                 webEngine.loadContent(
-                    "<html><body><p style='color: red;'>无法扫描文档目录，请检查项目根目录权限。</p></body></html>",
+                    "<html><body><p style='color: red;'>无法扫描文档资源，请检查类路径配置。</p><p>错误信息: " +
+                    (exception != null ? exception.getMessage() : "未知错误") + "</p></body></html>",
                     "text/html"
                 );
             });
@@ -263,13 +347,6 @@ public class HelpController implements Initializable {
         DOCUMENT_NAME_MAP.put("AI_SERVICE_USAGE.md", "AI 流量分析服务使用指南");
         DOCUMENT_NAME_MAP.put("IP_LOCATION_FEATURE.md", "IP 归属地查询功能使用说明");
         DOCUMENT_NAME_MAP.put("PROCESS_TRAFFIC_MONITOR.md", "进程流量监控面板功能说明");
-        
-        // 初始化文档显示顺序（README.md 始终在第一位）
-        DOCUMENT_ORDER.add("README.md");
-        DOCUMENT_ORDER.add("AI_CONFIG.md");
-        DOCUMENT_ORDER.add("AI_SERVICE_USAGE.md");
-        DOCUMENT_ORDER.add("IP_LOCATION_FEATURE.md");
-        DOCUMENT_ORDER.add("PROCESS_TRAFFIC_MONITOR.md");
         
         // 初始化文档显示顺序（README.md 始终在第一位）
         DOCUMENT_ORDER.add("README.md");
@@ -337,18 +414,32 @@ public class HelpController implements Initializable {
     
     /**
      * 加载文档内容
-     * 读取选中的文档文件，转换为 HTML 并在 WebView 中显示
+     * 从类路径读取选中的文档文件，转换为 HTML 并在 WebView 中显示
      * 
-     * @param displayName 文档的显示名称（用于查找对应的文件路径）
+     * <p>实现说明：</p>
+     * <ul>
+     *   <li>使用类路径资源读取，支持 Fat JAR 模式</li>
+     *   <li>通过 InputStream 读取资源内容</li>
+     *   <li>使用 BufferedReader 和 UTF-8 编码转换为字符串</li>
+     *   <li>完善的错误处理，确保资源缺失时不会崩溃</li>
+     * </ul>
+     * 
+     * @param displayName 文档的显示名称（用于查找对应的文件名）
      */
     private void loadDocument(String displayName) {
-        // 查找对应的文件路径
+        // 查找对应的文件名
         int index = documentListView.getItems().indexOf(displayName);
-        if (index < 0 || index >= documentPaths.size()) {
+        if (index < 0 || index >= documentFileNames.size()) {
+            // 显示错误信息
+            documentTitleLabel.setText("文档未找到");
+            webEngine.loadContent(
+                "<html><body><p style='color: red;'>无法找到对应的文档文件。</p></body></html>",
+                "text/html"
+            );
             return;
         }
         
-        Path documentPath = documentPaths.get(index);
+        String fileName = documentFileNames.get(index);
         
         // 更新标题
         documentTitleLabel.setText(displayName);
@@ -357,11 +448,65 @@ public class HelpController implements Initializable {
         Task<String> loadTask = new Task<String>() {
             @Override
             protected String call() throws Exception {
-                // 读取文件内容
-                String markdown = Files.readString(documentPath);
+                // 从类路径读取资源
+                ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+                if (classLoader == null) {
+                    classLoader = HelpController.class.getClassLoader();
+                }
                 
-                // 转换为 HTML
-                return MarkdownToHtmlConverter.convertToHtml(markdown);
+                // 尝试多种资源路径格式
+                String[] possiblePaths = {
+                    "/" + fileName,           // 类路径根目录
+                    fileName,                 // 相对路径
+                    "META-INF/resources/" + fileName  // META-INF 资源目录
+                };
+                
+                InputStream resourceStream = null;
+                String usedPath = null;
+                
+                // 尝试每个可能的路径
+                for (String resourcePath : possiblePaths) {
+                    resourceStream = classLoader.getResourceAsStream(resourcePath);
+                    if (resourceStream != null) {
+                        usedPath = resourcePath;
+                        System.out.println("[HelpController] 成功找到文档资源: " + resourcePath + " (文件: " + fileName + ")");
+                        break;
+                    }
+                }
+                
+                if (resourceStream == null) {
+                    // 所有路径都失败，返回详细错误信息
+                    StringBuilder errorMsg = new StringBuilder("文档资源未找到: " + fileName + "\n");
+                    errorMsg.append("已尝试的路径：\n");
+                    for (String path : possiblePaths) {
+                        errorMsg.append("  - ").append(path).append("\n");
+                    }
+                    errorMsg.append("请检查资源路径是否正确，确保 Markdown 文档已正确打包到 JAR 文件中。");
+                    throw new IOException(errorMsg.toString());
+                }
+                
+                // 使用 BufferedReader 和 UTF-8 编码读取内容
+                // try-with-resources 会自动关闭流，无需在 finally 中手动关闭
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(resourceStream, StandardCharsets.UTF_8))) {
+                    
+                    StringBuilder content = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        content.append(line).append("\n");
+                    }
+                    
+                    String markdown = content.toString();
+                    
+                    if (markdown.trim().isEmpty()) {
+                        throw new IOException("文档内容为空: " + fileName);
+                    }
+                    
+                    System.out.println("[HelpController] 成功读取文档: " + fileName + " (路径: " + usedPath + ", 大小: " + markdown.length() + " 字符)");
+                    
+                    // 转换为 HTML
+                    return MarkdownToHtmlConverter.convertToHtml(markdown);
+                }
             }
         };
         
@@ -376,9 +521,27 @@ public class HelpController implements Initializable {
             Throwable exception = loadTask.getException();
             String errorMessage = exception != null ? exception.getMessage() : "未知错误";
             
-            // 显示错误信息
+            System.err.println("[HelpController] 加载文档失败: " + errorMessage);
+            if (exception != null) {
+                exception.printStackTrace();
+            }
+            
+            // 显示友好的错误信息
             String errorHtml = String.format(
-                "<html><body><p style='color: red;'>无法加载文档：%s</p></body></html>",
+                "<html><body style='font-family: \"Microsoft YaHei\", sans-serif; padding: 20px;'>" +
+                "<h2 style='color: #dc3545;'>文档加载失败</h2>" +
+                "<p style='color: #666;'>无法加载文档：<strong>%s</strong></p>" +
+                "<p style='color: #999; font-size: 12px;'>错误详情：%s</p>" +
+                "<hr style='margin: 20px 0; border: none; border-top: 1px solid #ddd;'>" +
+                "<p style='color: #666; font-size: 12px;'>" +
+                "可能的原因：<br>" +
+                "1. 文档资源未正确打包到 JAR 文件中<br>" +
+                "2. 资源路径配置不正确<br>" +
+                "3. 文件编码问题<br>" +
+                "4. 类路径配置错误" +
+                "</p>" +
+                "</body></html>",
+                displayName,
                 errorMessage
             );
             webEngine.loadContent(errorHtml, "text/html");
@@ -392,15 +555,15 @@ public class HelpController implements Initializable {
     
     /**
      * 文档信息内部类
-     * 用于存储文档的显示名称和文件路径
+     * 用于存储文档的显示名称和文件名（类路径中的资源名称）
      */
     private static class DocumentInfo {
         final String displayName;
-        final Path path;
+        final String fileName;
         
-        DocumentInfo(String displayName, Path path) {
+        DocumentInfo(String displayName, String fileName) {
             this.displayName = displayName;
-            this.path = path;
+            this.fileName = fileName;
         }
     }
 }

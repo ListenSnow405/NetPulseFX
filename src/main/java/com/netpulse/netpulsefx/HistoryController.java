@@ -319,6 +319,10 @@ public class HistoryController {
     @FXML
     private Button cancelAIDiagnosisButton;
     
+    /** 弹出独立窗口按钮 */
+    @FXML
+    private Button openReportWindowButton;
+    
     /** 导出 Excel 按钮 */
     @FXML
     private Button exportExcelButton;
@@ -775,6 +779,10 @@ public class HistoryController {
             cancelAIDiagnosisButton.setManaged(true);
             cancelAIDiagnosisButton.setDisable(false);
         }
+        if (openReportWindowButton != null) {
+            openReportWindowButton.setVisible(false);
+            openReportWindowButton.setManaged(false);
+        }
         if (aiDiagnosisWebView != null) {
             // 在 WebView 中显示加载提示
             loadAIDiagnosisToWebView("## 正在加载...\n\n正在加载会话数据并生成 AI 诊断报告，请稍候...");
@@ -853,6 +861,10 @@ public class HistoryController {
                         cancelAIDiagnosisButton.setVisible(false);
                         cancelAIDiagnosisButton.setManaged(false);
                     }
+                    if (openReportWindowButton != null) {
+                        openReportWindowButton.setVisible(true);
+                        openReportWindowButton.setManaged(true);
+                    }
                     aiDiagnosisButton.setDisable(false);
                     statusLabel.setText("AI 诊断完成");
                     currentDiagnosisTask = null;
@@ -913,6 +925,10 @@ public class HistoryController {
         if (cancelAIDiagnosisButton != null) {
             cancelAIDiagnosisButton.setVisible(false);
             cancelAIDiagnosisButton.setManaged(false);
+        }
+        if (openReportWindowButton != null) {
+            openReportWindowButton.setVisible(false);
+            openReportWindowButton.setManaged(false);
         }
         aiDiagnosisButton.setDisable(false);
         statusLabel.setText("AI 诊断失败");
@@ -1217,6 +1233,47 @@ public class HistoryController {
         exportThread.start();
         
         statusLabel.setText("正在导出 PDF 文件...");
+    }
+    
+    /**
+     * 打开独立窗口按钮点击事件
+     * 以非模态方式打开 AI 报告独立窗口
+     */
+    @FXML
+    private void onOpenReportWindowClick() {
+        // 检查是否有 AI 诊断结果
+        if (currentAIDiagnosisReport == null || currentAIDiagnosisReport.trim().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "无报告内容", 
+                "请先执行 AI 诊断，生成分析报告后再打开独立窗口。");
+            return;
+        }
+        
+        // 获取当前模型名称
+        String modelName = "未知模型";
+        if (aiService != null && aiService.getConfig() != null) {
+            modelName = aiService.getConfig().getModel();
+        }
+        
+        // 获取当前选中的会话
+        DatabaseService.MonitoringSession session = null;
+        SessionDisplay selectedSession = sessionTable.getSelectionModel().getSelectedItem();
+        if (selectedSession != null) {
+            // 通过会话ID从数据库查询完整的会话对象
+            try {
+                List<DatabaseService.MonitoringSession> sessions = databaseService.getAllSessions().get();
+                session = sessions.stream()
+                        .filter(s -> s.getSessionId() == selectedSession.getSessionId())
+                        .findFirst()
+                        .orElse(null);
+            } catch (Exception e) {
+                System.err.println("[HistoryController] 查询会话信息失败: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        
+        // 创建并显示独立窗口
+        AIReportStage reportStage = new AIReportStage();
+        reportStage.showReport(currentAIDiagnosisReport, modelName, session);
     }
     
     /**

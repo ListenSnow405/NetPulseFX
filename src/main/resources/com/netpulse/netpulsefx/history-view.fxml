@@ -200,6 +200,14 @@
                         </VBox.margin>
                         <HBox spacing="10.0" alignment="CENTER_LEFT">
                             <Label text="AI 诊断结果" style="-fx-font-size: 14px; -fx-font-weight: bold;"/>
+                            <Button fx:id="openReportWindowButton" text="在独立窗口中查看" 
+                                    onAction="#onOpenReportWindowClick"
+                                    style="-fx-pref-width: 150px; -fx-background-color: #2196F3; -fx-text-fill: white;"
+                                    visible="false" managed="false">
+                                <HBox.margin>
+                                    <Insets left="10.0"/>
+                                </HBox.margin>
+                            </Button>
                             <Button fx:id="cancelAIDiagnosisButton" text="取消诊断" 
                                     onAction="#onCancelAIDiagnosisClick"
                                     style="-fx-pref-width: 100px; -fx-background-color: #ff9800; -fx-text-fill: white;"

@@ -1,5 +1,8 @@
 package com.netpulse.netpulsefx.service;
 
+import java.net.URI;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -75,16 +78,97 @@ public class DatabaseService {
     /**
      * H2 数据库连接字符串
      * 
-     * 格式说明：jdbc:h2:./netpulse_db
+     * 格式说明：jdbc:h2:{路径}/netpulse_db
      * - jdbc:h2: 表示使用 H2 数据库的 JDBC 驱动
-     * - ./netpulse_db: 表示数据库文件路径（相对于程序运行目录）
+     * - {路径}/netpulse_db: 表示数据库文件路径
      *   H2 会自动创建 netpulse_db.mv.db 文件（MVStore 存储引擎）
      * 
      * 连接模式：嵌入式文件模式（Embedded File Mode）
      * - 优点：数据持久化到文件，程序重启后数据仍然保留
      * - 适用：单进程应用，数据存储在本地文件系统
+     * 
+     * 路径处理：
+     * - 开发模式：使用当前工作目录（./netpulse_db）
+     * - 胖包模式：使用 JAR 文件所在目录（确保数据库文件与 JAR 在同一目录）
      */
-    private static final String DB_URL = "jdbc:h2:./netpulse_db";
+    private static String getDatabaseUrl() {
+        // 获取数据库文件应该存储的目录
+        String dbDir;
+        
+        try {
+            // 检查是否在 JAR 文件中运行（胖包模式）
+            java.net.URL location = DatabaseService.class.getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation();
+            
+            String locationPath = location.getPath();
+            
+            // 处理 URL 编码（例如 %20 转换为空格）
+            if (locationPath != null && locationPath.contains("%")) {
+                try {
+                    locationPath = URLDecoder.decode(locationPath, "UTF-8");
+                } catch (java.io.UnsupportedEncodingException e) {
+                    // UTF-8 应该总是支持的，但如果失败就使用原始路径
+                    System.err.println("[DatabaseService] URL 解码失败，使用原始路径: " + e.getMessage());
+                }
+            }
+            
+            // 如果路径包含 .jar，说明是从 JAR 文件运行的
+            if (locationPath != null && locationPath.contains(".jar")) {
+                // 获取 JAR 文件所在目录
+                java.io.File jarFile;
+                if (location.getProtocol().equals("file")) {
+                    // 文件协议，直接使用路径
+                    jarFile = new java.io.File(locationPath);
+                } else {
+                    // 其他协议（如 jar:file:），尝试解析
+                    try {
+                        jarFile = new java.io.File(new URI(location.toString()));
+                    } catch (java.net.URISyntaxException e) {
+                        // URI 解析失败，尝试直接使用路径
+                        System.err.println("[DatabaseService] URI 解析失败，尝试直接使用路径: " + e.getMessage());
+                        jarFile = new java.io.File(locationPath);
+                    }
+                }
+                
+                if (jarFile.exists() && jarFile.isFile()) {
+                    // JAR 文件存在，使用其所在目录
+                    java.io.File parentDir = jarFile.getParentFile();
+                    if (parentDir != null && parentDir.exists()) {
+                        dbDir = parentDir.getAbsolutePath();
+                    } else {
+                        // 父目录不存在，使用当前工作目录
+                        dbDir = System.getProperty("user.dir");
+                    }
+                } else {
+                    // JAR 文件不存在或路径无效，使用当前工作目录
+                    dbDir = System.getProperty("user.dir");
+                }
+            } else {
+                // 开发模式：使用当前工作目录
+                dbDir = System.getProperty("user.dir");
+            }
+            
+            // 确保路径是绝对路径
+            java.io.File dbDirFile = new java.io.File(dbDir);
+            dbDir = dbDirFile.getAbsolutePath();
+            
+            // 构建数据库 URL（H2 需要将路径中的反斜杠替换为正斜杠）
+            // Windows 路径：C:\path\to\db -> C:/path/to/db
+            String dbPath = dbDir.replace("\\", "/");
+            // 如果路径包含空格或其他特殊字符，H2 可能需要 URL 编码，但通常直接使用也可以
+            String dbUrl = "jdbc:h2:" + dbPath + "/netpulse_db";
+            
+            System.out.println("[DatabaseService] 数据库路径: " + dbPath + "/netpulse_db");
+            return dbUrl;
+            
+        } catch (Exception e) {
+            // 如果路径解析失败，回退到当前工作目录
+            System.err.println("[DatabaseService] 无法解析 JAR 路径，使用当前工作目录: " + e.getMessage());
+            e.printStackTrace();
+            return "jdbc:h2:./netpulse_db";
+        }
+    }
     
     /**
      * H2 数据库驱动类名
@@ -188,15 +272,233 @@ public class DatabaseService {
         // 注意：在 Java 6+ 中，DriverManager 会自动加载驱动，但显式加载更可靠
         Class.forName(DB_DRIVER);
         
+        // 获取数据库 URL（支持胖包模式）
+        String dbUrl = getDatabaseUrl();
+        
         // 建立数据库连接
         // 如果数据库文件不存在，H2 会自动创建
-        connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
+        connection = DriverManager.getConnection(dbUrl, DB_USER, DB_PASSWORD);
         
         // 创建新表结构
         createMonitoringSessionsTable();
         createTrafficRecordsTable();
         
-        System.out.println("[DatabaseService] 数据库初始化成功: " + DB_URL);
+        // 执行 Schema 迁移：确保所有必需的列都存在
+        performSchemaMigration();
+        
+        System.out.println("[DatabaseService] 数据库初始化成功: " + dbUrl);
+    }
+    
+    /**
+     * 执行数据库 Schema 迁移
+     * 自动添加缺失的列，确保旧版数据库可以平滑升级
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>检查 traffic_records 表是否存在</li>
+     *   <li>如果表不存在，执行完整的 CREATE TABLE（包含所有列）</li>
+     *   <li>如果表存在，检查并添加缺失的列（带默认值）</li>
+     *   <li>处理可能的异常，确保健壮性</li>
+     * </ol>
+     */
+    private void performSchemaMigration() {
+        try {
+            // 检查表是否存在
+            boolean tableExists = checkTableExists(TABLE_TRAFFIC_RECORDS);
+            
+            if (!tableExists) {
+                // 表不存在，执行完整的 CREATE TABLE（包含所有列）
+                System.out.println("[DatabaseService] 表不存在，执行完整创建...");
+                createTrafficRecordsTableComplete();
+            } else {
+                // 表存在，执行列迁移
+                System.out.println("[DatabaseService] 表已存在，执行 Schema 迁移...");
+                migrateTrafficRecordsTable();
+            }
+        } catch (SQLException e) {
+            System.err.println("[DatabaseService] Schema 迁移失败: " + e.getMessage());
+            e.printStackTrace();
+            // 如果迁移失败，尝试重新创建表（作为最后的回退方案）
+            try {
+                System.out.println("[DatabaseService] 尝试回退到完整表创建...");
+                dropTableIfExists(TABLE_TRAFFIC_RECORDS);
+                createTrafficRecordsTableComplete();
+            } catch (SQLException ex) {
+                System.err.println("[DatabaseService] 回退方案也失败: " + ex.getMessage());
+                ex.printStackTrace();
+                // 不抛出异常，让程序继续运行（可能表已经存在且结构正确）
+            }
+        }
+    }
+    
+    /**
+     * 检查表是否存在
+     */
+    private boolean checkTableExists(String tableName) throws SQLException {
+        String checkTableSQL = """
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = '%s'
+            """.formatted(tableName.toUpperCase());
+        
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(checkTableSQL)) {
+            return rs.next() && rs.getInt(1) > 0;
+        }
+    }
+    
+    /**
+     * 删除表（如果存在）
+     */
+    private void dropTableIfExists(String tableName) throws SQLException {
+        String dropTableSQL = "DROP TABLE IF EXISTS " + tableName;
+        try (Statement stmt = connection.createStatement()) {
+            stmt.execute(dropTableSQL);
+            System.out.println("[DatabaseService] 已删除表: " + tableName);
+        }
+    }
+    
+    /**
+     * 创建完整的 traffic_records 表（包含所有列）
+     */
+    private void createTrafficRecordsTableComplete() throws SQLException {
+        String createTableSQL = """
+            CREATE TABLE IF NOT EXISTS %s (
+                record_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                session_id BIGINT NOT NULL,
+                down_speed DOUBLE NOT NULL,
+                up_speed DOUBLE NOT NULL,
+                source_ip VARCHAR(45) DEFAULT NULL,
+                dest_ip VARCHAR(45) DEFAULT NULL,
+                process_name VARCHAR(255) DEFAULT NULL,
+                protocol VARCHAR(20) DEFAULT 'Unknown',
+                record_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES %s(session_id) ON DELETE CASCADE
+            )
+            """.formatted(TABLE_TRAFFIC_RECORDS, TABLE_MONITORING_SESSIONS);
+        
+        try (Statement stmt = connection.createStatement()) {
+            stmt.execute(createTableSQL);
+            System.out.println("[DatabaseService] 完整表创建成功: " + TABLE_TRAFFIC_RECORDS);
+        }
+    }
+    
+    /**
+     * 迁移 traffic_records 表：添加缺失的列
+     */
+    private void migrateTrafficRecordsTable() throws SQLException {
+        // 定义需要迁移的列及其默认值
+        // 注意：protocol 列使用 VARCHAR(20) 以支持更长的协议名称（如 HTTP/1.1, HTTPS, WebSocket 等）
+        java.util.Map<String, String> columnsToMigrate = new java.util.HashMap<>();
+        columnsToMigrate.put("source_ip", "VARCHAR(45) DEFAULT NULL");
+        columnsToMigrate.put("dest_ip", "VARCHAR(45) DEFAULT NULL");
+        columnsToMigrate.put("process_name", "VARCHAR(255) DEFAULT NULL");
+        columnsToMigrate.put("protocol", "VARCHAR(20) DEFAULT 'Unknown'");
+        
+        // 为每个列执行迁移
+        for (java.util.Map.Entry<String, String> entry : columnsToMigrate.entrySet()) {
+            String columnName = entry.getKey();
+            String columnDefinition = entry.getValue();
+            addColumnIfNotExistsWithDefault(TABLE_TRAFFIC_RECORDS, columnName, columnDefinition);
+        }
+    }
+    
+    /**
+     * 添加列（如果不存在），并设置默认值
+     * 
+     * @param tableName 表名
+     * @param columnName 列名
+     * @param columnDefinition 列定义（包含类型和默认值，如 "VARCHAR(20) DEFAULT 'Unknown'"）
+     * @throws SQLException 如果操作失败
+     */
+    private void addColumnIfNotExistsWithDefault(String tableName, String columnName, String columnDefinition) throws SQLException {
+        String checkColumnSQL = """
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = '%s' AND COLUMN_NAME = '%s'
+            """.formatted(tableName.toUpperCase(), columnName.toUpperCase());
+        
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(checkColumnSQL)) {
+            if (rs.next() && rs.getInt(1) == 0) {
+                // 列不存在，添加列（包含默认值）
+                String alterTableSQL = """
+                    ALTER TABLE %s ADD COLUMN %s %s
+                    """.formatted(tableName, columnName, columnDefinition);
+                
+                try {
+                    stmt.execute(alterTableSQL);
+                    System.out.println("[DatabaseService] 已添加列（带默认值）: " + tableName + "." + columnName);
+                    
+                    // 如果列有默认值，为现有记录更新该列（确保历史数据也有默认值）
+                    if (columnDefinition.contains("DEFAULT")) {
+                        updateExistingRecordsWithDefault(tableName, columnName, columnDefinition);
+                    }
+                } catch (SQLException e) {
+                    // 如果 ALTER TABLE 失败，记录错误但不抛出异常（可能是权限问题）
+                    System.err.println("[DatabaseService] 添加列失败: " + tableName + "." + columnName + 
+                                     " - " + e.getMessage());
+                    // 不重新抛出异常，继续处理其他列
+                }
+            } else {
+                System.out.println("[DatabaseService] 列已存在: " + tableName + "." + columnName);
+            }
+        }
+    }
+    
+    /**
+     * 为现有记录更新默认值
+     * 确保历史数据也有正确的默认值
+     */
+    private void updateExistingRecordsWithDefault(String tableName, String columnName, String columnDefinition) {
+        try {
+            // 从列定义中提取默认值
+            String defaultValue = extractDefaultValue(columnDefinition);
+            if (defaultValue != null && !defaultValue.equals("NULL")) {
+                // 只更新 NULL 值的记录
+                String updateSQL = """
+                    UPDATE %s SET %s = %s WHERE %s IS NULL
+                    """.formatted(tableName, columnName, defaultValue, columnName);
+                
+                try (Statement stmt = connection.createStatement()) {
+                    int updatedRows = stmt.executeUpdate(updateSQL);
+                    if (updatedRows > 0) {
+                        System.out.println("[DatabaseService] 已为 " + updatedRows + " 条历史记录设置默认值: " + 
+                                         tableName + "." + columnName);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            // 更新失败不影响主流程，只记录警告
+            System.err.println("[DatabaseService] 更新历史记录默认值失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 从列定义中提取默认值
+     * 例如：从 "VARCHAR(20) DEFAULT 'Unknown'" 中提取 "'Unknown'"
+     */
+    private String extractDefaultValue(String columnDefinition) {
+        // 查找 DEFAULT 关键字
+        int defaultIndex = columnDefinition.toUpperCase().indexOf("DEFAULT");
+        if (defaultIndex == -1) {
+            return null;
+        }
+        
+        // 提取 DEFAULT 之后的内容
+        String defaultValuePart = columnDefinition.substring(defaultIndex + "DEFAULT".length()).trim();
+        
+        // 如果默认值是字符串（用单引号或双引号包围），直接返回
+        if ((defaultValuePart.startsWith("'") && defaultValuePart.endsWith("'")) ||
+            (defaultValuePart.startsWith("\"") && defaultValuePart.endsWith("\""))) {
+            return defaultValuePart;
+        }
+        
+        // 如果是 NULL，返回 NULL
+        if (defaultValuePart.equalsIgnoreCase("NULL")) {
+            return "NULL";
+        }
+        
+        // 其他情况（数字等），直接返回
+        return defaultValuePart;
     }
     
     /**
@@ -368,7 +670,7 @@ public class DatabaseService {
      *   <li><strong>source_ip</strong>: VARCHAR(45) - 源IP地址</li>
      *   <li><strong>dest_ip</strong>: VARCHAR(45) - 目标IP地址</li>
      *   <li><strong>process_name</strong>: VARCHAR(255) - 进程名称</li>
-     *   <li><strong>protocol</strong>: VARCHAR(10) - 协议类型（TCP, UDP, ICMP, 其他）</li>
+     *   <li><strong>protocol</strong>: VARCHAR(20) - 协议类型（TCP, UDP, ICMP, HTTP, HTTPS 等，默认值：'Unknown'）</li>
      *   <li><strong>record_time</strong>: TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP - 记录时间</li>
      * </ul>
      * 
@@ -388,59 +690,35 @@ public class DatabaseService {
             }
         }
         
+        // 注意：此方法现在主要用于向后兼容
+        // 实际的表创建和迁移逻辑在 performSchemaMigration() 中处理
         if (!tableExists) {
-            String createTableSQL = """
-                CREATE TABLE %s (
-                    record_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    session_id BIGINT NOT NULL,
-                    down_speed DOUBLE NOT NULL,
-                    up_speed DOUBLE NOT NULL,
-                    source_ip VARCHAR(45),
-                    dest_ip VARCHAR(45),
-                    process_name VARCHAR(255),
-                    record_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (session_id) REFERENCES %s(session_id) ON DELETE CASCADE
-                )
-                """.formatted(TABLE_TRAFFIC_RECORDS, TABLE_MONITORING_SESSIONS);
-            
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(createTableSQL);
-                System.out.println("[DatabaseService] 表创建成功: " + TABLE_TRAFFIC_RECORDS);
-            }
+            // 使用完整创建方法（包含所有列和默认值）
+            createTrafficRecordsTableComplete();
         } else {
-            // 表已存在，检查并添加新字段（如果不存在）
-            addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "source_ip", "VARCHAR(45)");
-            addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "dest_ip", "VARCHAR(45)");
-            addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "process_name", "VARCHAR(255)");
-            addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "protocol", "VARCHAR(10)");
+            // 表已存在，执行迁移（添加缺失的列）
+            migrateTrafficRecordsTable();
         }
     }
     
     /**
      * 如果列不存在则添加列（用于数据库迁移）
+     * 注意：此方法已废弃，请使用 addColumnIfNotExistsWithDefault
      * 
      * @param tableName 表名
      * @param columnName 列名
      * @param columnType 列类型
      * @throws SQLException 如果操作失败
+     * @deprecated 使用 addColumnIfNotExistsWithDefault 替代，支持默认值
      */
+    @Deprecated
     private void addColumnIfNotExists(String tableName, String columnName, String columnType) throws SQLException {
-        String checkColumnSQL = """
-            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = '%s' AND COLUMN_NAME = '%s'
-            """.formatted(tableName.toUpperCase(), columnName.toUpperCase());
-        
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(checkColumnSQL)) {
-            if (rs.next() && rs.getInt(1) == 0) {
-                // 列不存在，添加列
-                String alterTableSQL = """
-                    ALTER TABLE %s ADD COLUMN %s %s
-                    """.formatted(tableName, columnName, columnType);
-                stmt.execute(alterTableSQL);
-                System.out.println("[DatabaseService] 已添加列: " + tableName + "." + columnName);
-            }
+        // 为了向后兼容，如果没有默认值，添加 NULL 默认值
+        String columnDefinition = columnType;
+        if (!columnDefinition.contains("DEFAULT")) {
+            columnDefinition = columnType + " DEFAULT NULL";
         }
+        addColumnIfNotExistsWithDefault(tableName, columnName, columnDefinition);
     }
     
     /**

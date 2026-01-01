@@ -115,6 +115,27 @@
     </dependencies>
 
     <build>
+        <!-- 资源配置：将项目根目录的 Markdown 文档包含到资源路径中 -->
+        <resources>
+            <resource>
+                <!-- 标准资源目录 -->
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <!-- 将项目根目录的 .md 文件复制到类路径的根目录 -->
+                <directory>${project.basedir}</directory>
+                <includes>
+                    <include>README.md</include>
+                    <include>AI_CONFIG.md</include>
+                    <include>AI_SERVICE_USAGE.md</include>
+                    <include>IP_LOCATION_FEATURE.md</include>
+                    <include>PROCESS_TRAFFIC_MONITOR.md</include>
+                </includes>
+                <targetPath>.</targetPath>
+                <filtering>false</filtering>
+            </resource>
+        </resources>
+        
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -127,13 +148,6 @@
                         <!-- 允许访问未命名模块中的 flexmark 等非模块化库 -->
                         <arg>--add-reads</arg>
                         <arg>com.netpulse.netpulsefx=ALL-UNNAMED</arg>
-                        <!-- 解决模块名不匹配：让期望 slf4j.api 的模块能够访问 org.slf4j -->
-                        <arg>--add-reads</arg>
-                        <arg>org.apache.poi.poi=org.slf4j</arg>
-                        <arg>--add-reads</arg>
-                        <arg>org.apache.poi.ooxml=org.slf4j</arg>
-                        <arg>--add-reads</arg>
-                        <arg>com.h2database=org.slf4j</arg>
                     </compilerArgs>
                 </configuration>
             </plugin>
@@ -158,6 +172,58 @@
                                 <option>--add-reads</option>
                                 <option>com.netpulse.netpulsefx=ALL-UNNAMED</option>
                             </options>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            
+            <!-- Maven Shade Plugin：生成可运行的"胖包"（Fat JAR） -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- 标记为附加产物，保留原始 JAR -->
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>shaded</shadedClassifierName>
+                            
+                            <!-- 配置 Manifest 文件 -->
+                            <transformers>
+                                <!-- 设置主类为 MainWrapper（规避 JavaFX 模块化限制） -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.netpulse.netpulsefx.MainWrapper</mainClass>
+                                </transformer>
+                                
+                                <!-- 合并 META-INF/services 文件（用于服务发现） -->
+                                <!-- 重要：Pcap4j 和 AI SDK 依赖服务发现机制 -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            
+                            <!-- 排除签名文件，避免 "Invalid signature file digest" 错误 -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <!-- 排除数字签名文件 -->
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                                <!-- 确保项目资源（Markdown 文档）被包含 -->
+                                <filter>
+                                    <artifact>${project.groupId}:${project.artifactId}</artifact>
+                                    <includes>
+                                        <include>**</include>
+                                    </includes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>
