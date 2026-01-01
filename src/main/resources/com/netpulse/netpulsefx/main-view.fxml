@@ -50,7 +50,11 @@
                   AnchorPane.rightAnchor="0.0" AnchorPane.topAnchor="0.0">
                 <!-- 帮助按钮：打开帮助中心窗口 -->
                 <Button fx:id="helpButton" text="帮助" onAction="#onHelpButtonClick"
-                        style="-fx-pref-width: 80px;"/>
+                        style="-fx-pref-width: 90px; -fx-pref-height: 32px; -fx-background-color: #6c757d; -fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold; -fx-background-radius: 4px; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"/>
+                
+                <!-- 配置 API 按钮 -->
+                <Button fx:id="configAIButton" text="配置 API" onAction="#onConfigAIButtonClick"
+                        style="-fx-pref-width: 110px; -fx-pref-height: 32px; -fx-background-color: #007bff; -fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold; -fx-background-radius: 4px; -fx-cursor: hand; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"/>
                 
                 <!-- 查看历史数据按钮：打开历史数据查看窗口 -->
                 <Button fx:id="viewHistoryButton" text="查看历史数据" onAction="#onViewHistoryButtonClick"

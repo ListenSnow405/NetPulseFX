@@ -733,10 +733,17 @@ public class HistoryController {
             return;
         }
         
+        // 每次使用前，尝试从全局配置管理器获取最新的 AI 服务
+        com.netpulse.netpulsefx.service.AIConfigManager configManager = 
+            com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
+        if (configManager.isConfigured()) {
+            aiService = configManager.getAIService();
+        }
+        
         // 检查 AI 服务是否可用
         if (aiService == null) {
             showAlert(Alert.AlertType.WARNING, "AI 服务未配置", 
-                    "AI 服务未初始化。\n\n请检查环境变量配置：\n" +
+                    "AI 服务未初始化。\n\n请先在主界面配置 API 参数，或检查环境变量配置：\n" +
                     "- AI_API_ENDPOINT\n" +
                     "- AI_API_KEY（如需要）\n" +
                     "- AI_PROVIDER\n" +
@@ -1036,8 +1043,20 @@ public class HistoryController {
         fileChooser.getExtensionFilters().add(
             new FileChooser.ExtensionFilter("PDF 文件", "*.pdf")
         );
-        fileChooser.setInitialFileName("AI报告_会话_" + selectedSession.getSessionId() + "_" + 
-            new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".pdf");
+        
+        // 智能命名：包含模型名称和精确到分钟的时间戳
+        String modelName = "未知模型";
+        if (aiService != null && aiService.getConfig() != null) {
+            modelName = aiService.getConfig().getModel();
+            // 清理模型名称中的特殊字符，确保文件名合法
+            modelName = modelName.replaceAll("[^a-zA-Z0-9_-]", "_");
+        }
+        
+        // 时间戳格式：yyyyMMdd_HHmm（精确到分钟）
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmm").format(new Date());
+        String defaultFileName = String.format("AI报告_%s_%s.pdf", modelName, timestamp);
+        
+        fileChooser.setInitialFileName(defaultFileName);
         
         Stage stage = (Stage) exportPDFButton.getScene().getWindow();
         File file = fileChooser.showSaveDialog(stage);
@@ -1143,11 +1162,21 @@ public class HistoryController {
     
     /**
      * 初始化 AI 服务
-     * 使用与 MainController 相同的逻辑
+     * 优先使用全局配置管理器中的配置，如果没有则从环境变量读取
      */
     private void initializeAIService() {
         try {
-            // 尝试从环境变量读取配置
+            // 首先尝试从全局配置管理器获取配置
+            com.netpulse.netpulsefx.service.AIConfigManager configManager = 
+                com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
+            
+            if (configManager.isConfigured()) {
+                aiService = configManager.getAIService();
+                System.out.println("[HistoryController] AI 服务已初始化（使用全局配置管理器）");
+                return;
+            }
+            
+            // 如果全局配置管理器中没有配置，则从环境变量读取
             String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
             String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
             String apiKey = cleanEnvValue(System.getenv("AI_API_KEY"));
@@ -1161,45 +1190,63 @@ public class HistoryController {
                     ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : "gpt-3.5-turbo");
                 String finalApiKey = apiKey != null ? apiKey : "";
                 
-                aiService = new AIService(new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel));
+                AIConfig config = new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel);
+                aiService = new AIService(config);
+                // 同时更新全局配置管理器
+                configManager.updateConfig(config);
                 
                 System.out.println("[HistoryController] AI 服务已初始化（环境变量配置）");
             } else {
                 // 环境变量未设置，根据 provider 使用默认配置
                 String finalProvider = (apiProvider != null && !apiProvider.isEmpty()) 
-                    ? apiProvider : "ollama";
+                    ? apiProvider : "deepseek";
                 
+                AIConfig config;
                 if ("deepseek".equalsIgnoreCase(finalProvider)) {
-                    AIConfig config = AIConfig.defaultDeepSeek();
+                    config = AIConfig.defaultDeepSeek();
                     String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
                     String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                    aiService = new AIService(new AIConfig(
+                    config = new AIConfig(
                         config.getProvider(),
                         config.getApiEndpoint(),
                         finalApiKey,
                         finalModel
-                    ));
+                    );
                 } else if ("openai".equalsIgnoreCase(finalProvider)) {
-                    AIConfig config = AIConfig.defaultOpenAI();
+                    config = AIConfig.defaultOpenAI();
                     String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
                     String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                    aiService = new AIService(new AIConfig(
+                    config = new AIConfig(
                         config.getProvider(),
                         config.getApiEndpoint(),
                         finalApiKey,
                         finalModel
-                    ));
+                    );
+                } else if ("gemini".equalsIgnoreCase(finalProvider)) {
+                    config = AIConfig.defaultGemini();
+                    String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                    String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
+                    config = new AIConfig(
+                        config.getProvider(),
+                        config.getApiEndpoint(),
+                        finalApiKey,
+                        finalModel
+                    );
                 } else {
                     // 默认使用 Ollama（本地）
-                    AIConfig config = AIConfig.defaultOllama();
+                    config = AIConfig.defaultOllama();
                     String finalModel = (model != null && !model.isEmpty()) ? model : "llama2";
-                    aiService = new AIService(new AIConfig(
+                    config = new AIConfig(
                         config.getProvider(),
                         config.getApiEndpoint(),
                         config.getApiKey(),
                         finalModel
-                    ));
+                    );
                 }
+                
+                aiService = new AIService(config);
+                // 同时更新全局配置管理器
+                configManager.updateConfig(config);
                 
                 System.out.println("[HistoryController] AI 服务已初始化（默认配置）");
             }

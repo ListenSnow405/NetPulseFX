@@ -200,6 +200,103 @@ public class DatabaseService {
     }
     
     /**
+     * 执行数据库自动清理
+     * 如果 traffic_records 表记录数超过 5000 条，自动清理最早的 10% 记录
+     * 
+     * <p>执行流程：</p>
+     * <ol>
+     *   <li>检查 traffic_records 表的记录总数</li>
+     *   <li>如果超过 5000 条，计算需要删除的记录数（10%）</li>
+     *   <li>删除最早的记录（按 record_time 排序）</li>
+     *   <li>压缩数据库文件</li>
+     * </ol>
+     * 
+     * <p>注意：此方法在后台线程执行，不会阻塞 UI</p>
+     */
+    public void performAutoCleanup() {
+        executorService.submit(() -> {
+            try {
+                // 检查记录总数
+                String countSQL = "SELECT COUNT(*) FROM " + TABLE_TRAFFIC_RECORDS;
+                int totalRecords = 0;
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery(countSQL)) {
+                    if (rs.next()) {
+                        totalRecords = rs.getInt(1);
+                    }
+                }
+                
+                System.out.println("[DatabaseService] 当前记录数: " + totalRecords);
+                
+                // 如果记录数超过 5000，执行清理
+                if (totalRecords > 5000) {
+                    int recordsToDelete = (int) Math.ceil(totalRecords * 0.1); // 删除 10%
+                    System.out.println("[DatabaseService] 开始自动清理，将删除 " + recordsToDelete + " 条记录");
+                    
+                    // 使用事务确保数据一致性
+                    connection.setAutoCommit(false);
+                    try {
+                        // 删除最早的记录
+                        String deleteSQL = """
+                            DELETE FROM %s 
+                            WHERE record_id IN (
+                                SELECT record_id FROM (
+                                    SELECT record_id FROM %s 
+                                    ORDER BY record_time ASC 
+                                    LIMIT %d
+                                )
+                            )
+                            """.formatted(TABLE_TRAFFIC_RECORDS, TABLE_TRAFFIC_RECORDS, recordsToDelete);
+                        
+                        try (Statement stmt = connection.createStatement()) {
+                            int deletedCount = stmt.executeUpdate(deleteSQL);
+                            connection.commit();
+                            System.out.println("[DatabaseService] 自动清理完成，已删除 " + deletedCount + " 条记录");
+                            
+                            // 压缩数据库
+                            try (Statement compressStmt = connection.createStatement()) {
+                                compressStmt.execute("CHECKPOINT DEFRAG");
+                                System.out.println("[DatabaseService] 数据库压缩完成");
+                            }
+                        }
+                    } catch (SQLException e) {
+                        connection.rollback();
+                        System.err.println("[DatabaseService] 自动清理失败: " + e.getMessage());
+                        e.printStackTrace();
+                    } finally {
+                        connection.setAutoCommit(true);
+                    }
+                } else {
+                    System.out.println("[DatabaseService] 记录数未超过阈值，无需清理");
+                }
+            } catch (SQLException e) {
+                System.err.println("[DatabaseService] 自动清理检查失败: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+    }
+    
+    /**
+     * 获取数据库记录总数（用于状态显示）
+     * 
+     * @return 记录总数，如果查询失败返回 -1
+     */
+    public int getRecordCount() {
+        try {
+            String countSQL = "SELECT COUNT(*) FROM " + TABLE_TRAFFIC_RECORDS;
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery(countSQL)) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("[DatabaseService] 获取记录数失败: " + e.getMessage());
+        }
+        return -1;
+    }
+    
+    /**
      * 创建监控会话表
      * 
      * <p>表结构说明：</p>

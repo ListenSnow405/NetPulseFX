@@ -28,6 +28,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.GridPane;
 import javafx.animation.TranslateTransition;
 import javafx.util.Duration;
 import javafx.geometry.Pos;
@@ -39,12 +40,18 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.Dialog;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.PasswordField;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.event.ActionEvent;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.concurrent.Service;
+import javafx.concurrent.Task;
 import javafx.concurrent.WorkerStateEvent;
+import java.net.URI;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.XYChart;
 import javafx.stage.Stage;
@@ -99,6 +106,10 @@ public class MainController {
     /** 帮助按钮 */
     @FXML
     private Button helpButton;
+    
+    /** 配置 AI 引擎按钮 */
+    @FXML
+    private Button configAIButton;
     
     /** 查看历史数据按钮 */
     @FXML
@@ -314,8 +325,18 @@ public class MainController {
         // 初始化状态栏
         initializeStatusBar();
         
+        // 初始化按钮悬停效果
+        initializeButtonHoverEffects();
+        
         // 初始化 BPF 过滤输入框
         initializeBpfFilterInput();
+        
+        // 启动数据库自动清理检查（延迟执行，避免阻塞初始化）
+        Platform.runLater(() -> {
+            if (databaseService != null) {
+                databaseService.performAutoCleanup();
+            }
+        });
         
         // 初始化时自动刷新网卡列表
         refreshNICs();
@@ -487,25 +508,45 @@ public class MainController {
     /**
      * 初始化 AI 服务
      * 从环境变量读取配置并创建 AIService 实例
+     * 同时更新全局配置管理器
      */
     private void initializeAIService() {
         try {
+            // 首先检查全局配置管理器是否有配置
+            com.netpulse.netpulsefx.service.AIConfigManager configManager = 
+                com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
+            
+            if (configManager.isConfigured()) {
+                aiService = configManager.getAIService();
+                AIConfig config = configManager.getConfig();
+                aiProviderName = formatProviderName(config.getProvider());
+                System.out.println("[MainController] AI 服务已初始化（使用全局配置管理器）");
+                return;
+            }
+            
             // 尝试从环境变量读取配置
             String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
             String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
             String apiKey = cleanEnvValue(System.getenv("AI_API_KEY"));
             String model = cleanEnvValue(System.getenv("AI_MODEL"));
             
+            AIConfig config;
+            
             // 如果环境变量已设置，使用环境变量配置
             if (apiEndpoint != null && !apiEndpoint.isEmpty()) {
                 String finalProvider = apiProvider != null && !apiProvider.isEmpty() 
                     ? apiProvider : "deepseek";
                 String finalModel = model != null && !model.isEmpty() 
-                    ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : "gpt-3.5-turbo");
+                    ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : 
+                               finalProvider.equalsIgnoreCase("gemini") ? "gemini-2.5-flash" : "gpt-4o");
                 String finalApiKey = apiKey != null ? apiKey : "";
                 
-                aiService = new AIService(new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel));
+                config = new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel);
+                aiService = new AIService(config);
                 aiProviderName = formatProviderName(finalProvider);
+                
+                // 更新全局配置管理器
+                configManager.updateConfig(config);
                 
                 System.out.println("[MainController] AI 服务已初始化（环境变量配置）");
             } else {
@@ -514,39 +555,57 @@ public class MainController {
                     ? apiProvider : "deepseek";
                 
                 if ("deepseek".equalsIgnoreCase(finalProvider)) {
-                    AIConfig config = AIConfig.defaultDeepSeek();
+                    AIConfig defaultConfig = AIConfig.defaultDeepSeek();
                     String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
-                    String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                    aiService = new AIService(new AIConfig(
-                        config.getProvider(),
-                        config.getApiEndpoint(),
+                    String finalModel = (model != null && !model.isEmpty()) ? model : defaultConfig.getModel();
+                    config = new AIConfig(
+                        defaultConfig.getProvider(),
+                        defaultConfig.getApiEndpoint(),
                         finalApiKey,
                         finalModel
-                    ));
+                    );
+                    aiService = new AIService(config);
                     aiProviderName = formatProviderName(config.getProvider());
                 } else if ("openai".equalsIgnoreCase(finalProvider)) {
-                    AIConfig config = AIConfig.defaultOpenAI();
+                    AIConfig defaultConfig = AIConfig.defaultOpenAI();
                     String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
-                    String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
-                    aiService = new AIService(new AIConfig(
-                        config.getProvider(),
-                        config.getApiEndpoint(),
+                    String finalModel = (model != null && !model.isEmpty()) ? model : defaultConfig.getModel();
+                    config = new AIConfig(
+                        defaultConfig.getProvider(),
+                        defaultConfig.getApiEndpoint(),
                         finalApiKey,
                         finalModel
-                    ));
+                    );
+                    aiService = new AIService(config);
+                    aiProviderName = formatProviderName(config.getProvider());
+                } else if ("gemini".equalsIgnoreCase(finalProvider)) {
+                    AIConfig defaultConfig = AIConfig.defaultGemini();
+                    String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                    String finalModel = (model != null && !model.isEmpty()) ? model : defaultConfig.getModel();
+                    config = new AIConfig(
+                        defaultConfig.getProvider(),
+                        defaultConfig.getApiEndpoint(),
+                        finalApiKey,
+                        finalModel
+                    );
+                    aiService = new AIService(config);
                     aiProviderName = formatProviderName(config.getProvider());
                 } else {
                     // 默认使用 Ollama（本地）
-                    AIConfig config = AIConfig.defaultOllama();
+                    AIConfig defaultConfig = AIConfig.defaultOllama();
                     String finalModel = (model != null && !model.isEmpty()) ? model : "llama2";
-                    aiService = new AIService(new AIConfig(
-                        config.getProvider(),
-                        config.getApiEndpoint(),
-                        config.getApiKey(),
+                    config = new AIConfig(
+                        defaultConfig.getProvider(),
+                        defaultConfig.getApiEndpoint(),
+                        defaultConfig.getApiKey(),
                         finalModel
-                    ));
+                    );
+                    aiService = new AIService(config);
                     aiProviderName = formatProviderName(config.getProvider());
                 }
+                
+                // 更新全局配置管理器
+                configManager.updateConfig(config);
                 
                 System.out.println("[MainController] AI 服务已初始化（默认配置）");
             }
@@ -589,6 +648,8 @@ public class MainController {
             return "DeepSeek";
         } else if ("openai".equals(lower)) {
             return "OpenAI";
+        } else if ("gemini".equals(lower)) {
+            return "Google Gemini";
         } else if ("ollama".equals(lower)) {
             return "Ollama";
         } else {
@@ -613,42 +674,47 @@ public class MainController {
             return;
         }
         
-        // 获取提供商名称
-        String providerName = aiProviderName;
-        if (providerName == null || providerName.isEmpty()) {
-            // 如果未保存提供商名称，尝试从环境变量获取
-            String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
-            if (apiProvider == null || apiProvider.isEmpty()) {
-                apiProvider = "deepseek";
-            }
-            providerName = formatProviderName(apiProvider);
+        // 检查配置是否有效
+        AIConfig config = aiService.getConfig();
+        if (config == null) {
+            aiStatusLabel.setText("未连接");
+            aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+            return;
         }
         
-        // 检查环境变量或配置是否存在
-        String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
-        if (apiEndpoint == null || apiEndpoint.isEmpty()) {
-            // 如果没有设置环境变量，检查是否有默认配置（DeepSeek）
-            String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
-            if (apiProvider == null || apiProvider.isEmpty()) {
-                apiProvider = "deepseek";
-            }
-            // 如果有provider，认为已配置（使用默认端点）
-            if (apiProvider != null && !apiProvider.isEmpty()) {
-                aiStatusLabel.setText("已连接" + providerName);
-                aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
-                // 异步测试连接（不阻塞UI）
-                testAIConnectionAsync(providerName);
-            } else {
-                aiStatusLabel.setText("未配置");
-                aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
-            }
-        } else {
-            // 环境变量已设置，显示"已连接{提供商名称}"
-            aiStatusLabel.setText("已连接" + providerName);
-            aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
-            // 异步测试连接（不阻塞UI）
-            testAIConnectionAsync(providerName);
+        // 检查 API 端点是否配置
+        String apiEndpoint = config.getApiEndpoint();
+        if (apiEndpoint == null || apiEndpoint.trim().isEmpty()) {
+            aiStatusLabel.setText("未连接");
+            aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+            return;
         }
+        
+        // 对于需要 API Key 的提供商，检查是否已配置
+        String provider = config.getProvider();
+        if (provider != null && !provider.equalsIgnoreCase("ollama")) {
+            String apiKey = config.getApiKey();
+            if (apiKey == null || apiKey.trim().isEmpty()) {
+                aiStatusLabel.setText("未连接");
+                aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+                return;
+            }
+        }
+        
+        // 配置存在，获取提供商名称
+        String providerName = aiProviderName;
+        if (providerName == null || providerName.isEmpty()) {
+            providerName = formatProviderName(provider);
+        }
+        
+        // 显示"已连接{提供商名称}"，然后异步测试连接
+        String displayName = providerName != null && !providerName.isEmpty() 
+            ? providerName : "AI";
+        aiStatusLabel.setText("已连接" + displayName);
+        aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
+        
+        // 异步测试连接（不阻塞UI）
+        testAIConnectionAsync(providerName);
     }
     
     /**
@@ -693,11 +759,9 @@ public class MainController {
                         aiStatusLabel.setText("已连接" + displayName);
                         aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
                     } else {
-                        // 配置存在但连接失败，显示"连接失败{提供商名称}"
-                        String displayName = providerName != null && !providerName.isEmpty() 
-                            ? providerName : "AI";
-                        aiStatusLabel.setText("连接失败" + displayName);
-                        aiStatusLabel.setStyle("-fx-text-fill: #ffc107;");
+                        // 配置存在但连接失败，显示"未连接"
+                        aiStatusLabel.setText("未连接");
+                        aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
                     }
                 }
             });
@@ -983,6 +1047,689 @@ public class MainController {
     }
     
     // ========== 事件处理方法 ==========
+    
+    /**
+     * 配置 API 按钮的点击事件处理
+     * 打开 API 配置对话框
+     */
+    @FXML
+    protected void onConfigAIButtonClick() {
+        showAIConfigDialog();
+    }
+    
+    /**
+     * 显示 API 配置对话框
+     */
+    private void showAIConfigDialog() {
+        javafx.scene.control.Dialog<AIConfig> dialog = new javafx.scene.control.Dialog<>();
+        dialog.setTitle("配置 API");
+        dialog.setHeaderText("配置 API 参数");
+        
+        // 创建对话框内容
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        grid.setPadding(new Insets(20, 20, 10, 20));
+        
+        // 模型名称下拉框
+        ComboBox<String> modelComboBox = new ComboBox<>();
+        modelComboBox.getItems().addAll(
+            "deepseek-chat",
+            "gpt-4o",
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-3.5-turbo",
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-pro",
+            "llama2",
+            "llama3",
+            "custom"
+        );
+        modelComboBox.setPromptText("请选择模型");
+        // 设置下拉框样式
+        modelComboBox.setStyle(
+            "-fx-pref-width: 400px; " +
+            "-fx-pref-height: 32px; " +
+            "-fx-background-color: white; " +
+            "-fx-border-color: #ced4da; " +
+            "-fx-border-width: 1px; " +
+            "-fx-border-radius: 4px; " +
+            "-fx-background-radius: 4px; " +
+            "-fx-font-size: 13px; " +
+            "-fx-padding: 5px 10px;"
+        );
+        // 添加悬停效果
+        modelComboBox.setOnMouseEntered(e -> modelComboBox.setStyle(
+            "-fx-pref-width: 400px; " +
+            "-fx-pref-height: 32px; " +
+            "-fx-background-color: #f8f9fa; " +
+            "-fx-border-color: #007bff; " +
+            "-fx-border-width: 1px; " +
+            "-fx-border-radius: 4px; " +
+            "-fx-background-radius: 4px; " +
+            "-fx-font-size: 13px; " +
+            "-fx-padding: 5px 10px;"
+        ));
+        modelComboBox.setOnMouseExited(e -> modelComboBox.setStyle(
+            "-fx-pref-width: 400px; " +
+            "-fx-pref-height: 32px; " +
+            "-fx-background-color: white; " +
+            "-fx-border-color: #ced4da; " +
+            "-fx-border-width: 1px; " +
+            "-fx-border-radius: 4px; " +
+            "-fx-background-radius: 4px; " +
+            "-fx-font-size: 13px; " +
+            "-fx-padding: 5px 10px;"
+        ));
+        
+        // 获取当前配置
+        String currentModel = aiService != null ? aiService.getConfig().getModel() : "gpt-4o";
+        String currentEndpoint = aiService != null ? aiService.getConfig().getApiEndpoint() : "";
+        String currentKey = aiService != null ? aiService.getConfig().getApiKey() : "";
+        
+        // API 接口输入框
+        TextField apiEndpointField = new TextField();
+        apiEndpointField.setPromptText("输入 API 接口地址");
+        apiEndpointField.setPrefWidth(400);
+        apiEndpointField.setStyle(
+            "-fx-pref-height: 32px; " +
+            "-fx-background-color: white; " +
+            "-fx-border-color: #ced4da; " +
+            "-fx-border-width: 1px; " +
+            "-fx-border-radius: 4px; " +
+            "-fx-background-radius: 4px; " +
+            "-fx-font-size: 13px; " +
+            "-fx-padding: 5px 10px;"
+        );
+        // 添加焦点效果
+        apiEndpointField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue) {
+                apiEndpointField.setStyle(
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: white; " +
+                    "-fx-border-color: #007bff; " +
+                    "-fx-border-width: 2px; " +
+                    "-fx-border-radius: 4px; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-padding: 5px 10px;"
+                );
+            } else {
+                apiEndpointField.setStyle(
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: white; " +
+                    "-fx-border-color: #ced4da; " +
+                    "-fx-border-width: 1px; " +
+                    "-fx-border-radius: 4px; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-padding: 5px 10px;"
+                );
+            }
+        });
+        
+        // 如果当前没有配置或接口地址为空，根据模型设置默认地址
+        if (currentEndpoint == null || currentEndpoint.isEmpty()) {
+            String defaultEndpoint = getDefaultEndpointForModel(currentModel);
+            if (defaultEndpoint != null && !defaultEndpoint.isEmpty()) {
+                apiEndpointField.setText(defaultEndpoint);
+            }
+        } else {
+            apiEndpointField.setText(currentEndpoint);
+        }
+        
+        // API Key 输入框（密码框）
+        PasswordField apiKeyField = new PasswordField();
+        apiKeyField.setPromptText("输入 API Key");
+        apiKeyField.setText(currentKey);
+        apiKeyField.setPrefWidth(400);
+        apiKeyField.setStyle(
+            "-fx-pref-height: 32px; " +
+            "-fx-background-color: white; " +
+            "-fx-border-color: #ced4da; " +
+            "-fx-border-width: 1px; " +
+            "-fx-border-radius: 4px; " +
+            "-fx-background-radius: 4px; " +
+            "-fx-font-size: 13px; " +
+            "-fx-padding: 5px 10px;"
+        );
+        // 添加焦点效果
+        apiKeyField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue) {
+                apiKeyField.setStyle(
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: white; " +
+                    "-fx-border-color: #007bff; " +
+                    "-fx-border-width: 2px; " +
+                    "-fx-border-radius: 4px; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-padding: 5px 10px;"
+                );
+            } else {
+                apiKeyField.setStyle(
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: white; " +
+                    "-fx-border-color: #ced4da; " +
+                    "-fx-border-width: 1px; " +
+                    "-fx-border-radius: 4px; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-padding: 5px 10px;"
+                );
+            }
+        });
+        
+        // 状态标签
+        Label statusLabel = new Label();
+        statusLabel.setStyle("-fx-text-fill: #666; -fx-font-size: 12px;");
+        
+        // 设置当前模型值（必须在创建输入框之后）
+        if (currentModel != null && modelComboBox.getItems().contains(currentModel)) {
+            modelComboBox.setValue(currentModel);
+        }
+        
+        // 当模型选择改变时，自动更新默认接口地址
+        modelComboBox.valueProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue != null && !newValue.equals("custom")) {
+                String defaultEndpoint = getDefaultEndpointForModel(newValue);
+                if (defaultEndpoint != null && !defaultEndpoint.isEmpty()) {
+                    // 只有当用户没有手动修改过接口地址，或者地址为空时才自动更新
+                    String currentText = apiEndpointField.getText();
+                    if (currentText == null || currentText.isEmpty() || 
+                        currentText.equals(getDefaultEndpointForModel(oldValue))) {
+                        apiEndpointField.setText(defaultEndpoint);
+                    }
+                }
+            }
+        });
+        
+        // 添加到网格
+        grid.add(new Label("模型名称:"), 0, 0);
+        grid.add(modelComboBox, 1, 0);
+        grid.add(new Label("API 接口:"), 0, 1);
+        grid.add(apiEndpointField, 1, 1);
+        grid.add(new Label("API Key:"), 0, 2);
+        grid.add(apiKeyField, 1, 2);
+        grid.add(statusLabel, 1, 3);
+        
+        dialog.getDialogPane().setContent(grid);
+        
+        // 添加按钮
+        ButtonType saveAndTestButtonType = new ButtonType("保存且测试", javafx.scene.control.ButtonBar.ButtonData.APPLY);
+        ButtonType cancelButtonType = new ButtonType("取消", javafx.scene.control.ButtonBar.ButtonData.CANCEL_CLOSE);
+        dialog.getDialogPane().getButtonTypes().addAll(saveAndTestButtonType, cancelButtonType);
+        
+        // 应用按钮样式
+        Platform.runLater(() -> {
+            // 保存且测试按钮样式（绿色 - 确认操作）
+            javafx.scene.control.Button saveAndTestButton = (javafx.scene.control.Button) dialog.getDialogPane().lookupButton(saveAndTestButtonType);
+            if (saveAndTestButton != null) {
+                saveAndTestButton.setStyle(
+                    "-fx-pref-width: 120px; " +
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: #28a745; " +
+                    "-fx-text-fill: white; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-font-weight: bold; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-cursor: hand; " +
+                    "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"
+                );
+                // 添加悬停效果
+                saveAndTestButton.setOnMouseEntered(ev -> saveAndTestButton.setStyle(
+                    "-fx-pref-width: 120px; " +
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: #218838; " +
+                    "-fx-text-fill: white; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-font-weight: bold; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-cursor: hand; " +
+                    "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 3, 0, 0, 2);"
+                ));
+                saveAndTestButton.setOnMouseExited(ev -> saveAndTestButton.setStyle(
+                    "-fx-pref-width: 120px; " +
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: #28a745; " +
+                    "-fx-text-fill: white; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-font-weight: bold; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-cursor: hand; " +
+                    "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"
+                ));
+            }
+            
+            // 取消按钮样式
+            javafx.scene.control.Button cancelButton = (javafx.scene.control.Button) dialog.getDialogPane().lookupButton(cancelButtonType);
+            if (cancelButton != null) {
+                cancelButton.setStyle(
+                    "-fx-pref-width: 80px; " +
+                    "-fx-pref-height: 32px; " +
+                    "-fx-background-color: #6c757d; " +
+                    "-fx-text-fill: white; " +
+                    "-fx-font-size: 13px; " +
+                    "-fx-font-weight: bold; " +
+                    "-fx-background-radius: 4px; " +
+                    "-fx-cursor: hand;"
+                );
+            }
+        });
+        
+        // 保存且测试按钮事件
+        javafx.scene.control.Button saveAndTestButton = (javafx.scene.control.Button) dialog.getDialogPane().lookupButton(saveAndTestButtonType);
+        saveAndTestButton.setOnAction(e -> {
+            String selectedModel = modelComboBox.getValue();
+            String endpoint = apiEndpointField.getText().trim();
+            String key = apiKeyField.getText();
+            
+            if (selectedModel == null || selectedModel.isEmpty()) {
+                statusLabel.setText("错误：请选择模型名称");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                e.consume();
+                return;
+            }
+            
+            if (endpoint.isEmpty()) {
+                statusLabel.setText("错误：请输入 API 接口地址");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                e.consume();
+                return;
+            }
+            
+            // 检查 API Key（Ollama 可能不需要，但其他提供商需要）
+            String provider = "deepseek";
+            if (endpoint.contains("openai.com")) {
+                provider = "openai";
+            } else if (endpoint.contains("generativelanguage.googleapis.com") || endpoint.contains("gemini")) {
+                provider = "gemini";
+            } else if (endpoint.contains("localhost") || endpoint.contains("ollama")) {
+                provider = "ollama";
+            } else if (endpoint.contains("deepseek.com")) {
+                provider = "deepseek";
+            }
+            
+            // 对于需要 API Key 的提供商，检查是否为空
+            if (!provider.equals("ollama") && (key == null || key.trim().isEmpty())) {
+                statusLabel.setText("错误：请输入 API Key");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                String providerName = switch (provider) {
+                    case "deepseek" -> "DeepSeek";
+                    case "openai" -> "OpenAI";
+                    case "gemini" -> "Google Gemini";
+                    default -> provider;
+                };
+                showAlert(Alert.AlertType.WARNING, "配置错误", 
+                    "API Key 不能为空。\n\n" + providerName + " 需要有效的 API Key 才能使用。");
+                e.consume();
+                return;
+            }
+            
+            // 创建新配置
+            AIConfig newConfig = new AIConfig(provider, endpoint, key, selectedModel);
+            aiService = new AIService(newConfig);
+            aiProviderName = formatProviderName(provider);
+            
+            // 更新全局配置管理器，确保 HistoryController 也能使用新配置
+            com.netpulse.netpulsefx.service.AIConfigManager.getInstance().updateConfig(newConfig);
+            
+            // 立即更新状态栏为"连接中"
+            if (aiStatusLabel != null) {
+                aiStatusLabel.setText("连接中");
+                aiStatusLabel.setStyle("-fx-text-fill: #007bff;");
+            }
+            
+            // 显示保存成功消息
+            statusLabel.setText("配置已保存，正在测试连接...");
+            statusLabel.setStyle("-fx-text-fill: #007bff; -fx-font-size: 12px;");
+            
+            // 执行测试连接
+            testAIConnection(selectedModel, endpoint, key, statusLabel, dialog, true);
+        });
+        
+        // 设置结果转换器（不再需要，因为按钮事件已经处理了所有逻辑）
+        dialog.setResultConverter(buttonType -> {
+            // 返回 null，因为所有逻辑都在按钮事件中处理
+            return null;
+        });
+        
+        // 显示对话框（按钮事件会处理保存和测试，不需要在这里处理）
+        dialog.showAndWait();
+    }
+    
+    /**
+     * 根据模型名称获取默认的 API 接口地址
+     * 
+     * @param modelName 模型名称
+     * @return 默认的 API 接口地址
+     */
+    private String getDefaultEndpointForModel(String modelName) {
+        if (modelName == null || modelName.isEmpty()) {
+            return "";
+        }
+        
+        // 根据模型名称返回对应的默认接口地址
+        return switch (modelName.toLowerCase()) {
+            case "deepseek-chat" -> "https://api.deepseek.com/v1/chat/completions";
+            case "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo" -> "https://api.openai.com/v1/chat/completions";
+            case "gemini-2.5-flash" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+            case "gemini-1.5-flash" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+            case "gemini-1.5-pro" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent";
+            case "gemini-pro" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+            case "llama2", "llama3" -> "http://localhost:11434/api/generate";
+            default -> "";
+        };
+    }
+    
+    /**
+     * 测试 AI 连接
+     * 
+     * @param model 模型名称
+     * @param endpoint API 接口地址
+     * @param apiKey API Key
+     * @param statusLabel 状态标签（用于显示测试状态）
+     * @param dialog 对话框对象（用于阻止关闭，可为 null）
+     * @param afterSave 是否在保存后测试（true 时测试成功后关闭对话框）
+     */
+    private void testAIConnection(String model, String endpoint, String apiKey, Label statusLabel, 
+                                 javafx.scene.control.Dialog<?> dialog, boolean afterSave) {
+        if (model == null || model.isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "测试连接", "请选择模型名称");
+            return;
+        }
+        
+        if (endpoint == null || endpoint.trim().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "测试连接", "请输入 API 接口地址");
+            return;
+        }
+        
+        // 确定提供商
+        String provider = "deepseek";
+        if (endpoint.contains("openai.com")) {
+            provider = "openai";
+        } else if (endpoint.contains("localhost") || endpoint.contains("ollama")) {
+            provider = "ollama";
+        } else if (endpoint.contains("deepseek.com")) {
+            provider = "deepseek";
+        }
+        
+        // 对于需要 API Key 的提供商，检查是否为空
+        if (!provider.equals("ollama") && (apiKey == null || apiKey.trim().isEmpty())) {
+            if (afterSave) {
+                statusLabel.setText("配置已保存，但连接测试失败");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                showAlert(Alert.AlertType.WARNING, "保存成功但测试失败", 
+                    "配置已保存，但连接测试失败：\n\nAPI Key 不能为空。\n\n" +
+                    (provider.equals("deepseek") ? "DeepSeek" : "OpenAI") + " 需要有效的 API Key 才能使用。");
+            } else {
+                statusLabel.setText("错误：请输入 API Key");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                showAlert(Alert.AlertType.WARNING, "测试连接", 
+                    "API Key 不能为空。\n\n" +
+                    (provider.equals("deepseek") ? "DeepSeek" : "OpenAI") + " 需要有效的 API Key 才能使用。");
+            }
+            return;
+        }
+        
+        statusLabel.setText("正在测试连接...");
+        statusLabel.setStyle("-fx-text-fill: #007bff; -fx-font-size: 12px;");
+        
+        // 创建临时配置进行测试
+        AIConfig testConfig = new AIConfig(provider, endpoint.trim(), apiKey, model);
+        
+        // 使用专门的测试方法，直接检查 HTTP 状态码
+        testAIConnectionDirect(testConfig, model, endpoint, statusLabel, dialog, afterSave);
+    }
+    
+    /**
+     * 直接测试 AI 连接（检查 HTTP 状态码）
+     * 
+     * @param config AI 配置
+     * @param model 模型名称
+     * @param endpoint API 接口地址
+     * @param statusLabel 状态标签
+     * @param dialog 对话框对象
+     * @param afterSave 是否在保存后测试
+     */
+    private void testAIConnectionDirect(AIConfig config, String model, String endpoint, 
+                                       Label statusLabel, javafx.scene.control.Dialog<?> dialog, 
+                                       boolean afterSave) {
+        // 在后台线程执行测试
+        Task<Boolean> testTask = new Task<Boolean>() {
+            @Override
+            protected Boolean call() throws Exception {
+                try {
+                    java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                            .connectTimeout(java.time.Duration.ofSeconds(10))
+                            .build();
+                    
+                    // 构建测试请求体（发送一个简单的测试消息）
+                    String requestBody;
+                    if (config.getProvider().equals("ollama")) {
+                        // Ollama 格式
+                        requestBody = String.format(
+                            """
+                            {
+                              "model": "%s",
+                              "prompt": "test",
+                              "stream": false
+                            }""",
+                            model
+                        );
+                    } else {
+                        // DeepSeek/OpenAI 格式
+                        requestBody = String.format(
+                            """
+                            {
+                              "model": "%s",
+                              "messages": [
+                                {"role": "user", "content": "test"}
+                              ],
+                              "max_tokens": 10
+                            }""",
+                            model
+                        );
+                    }
+                    
+                    // 构建 HTTP 请求
+                    java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
+                            .uri(URI.create(config.getApiEndpoint()))
+                            .timeout(java.time.Duration.ofSeconds(10))
+                            .header("Content-Type", "application/json");
+                    
+                    // 添加 API Key（如果不是 Ollama）
+                    if (!config.getProvider().equals("ollama") && 
+                        config.getApiKey() != null && !config.getApiKey().trim().isEmpty()) {
+                        // DeepSeek 和 OpenAI 都使用 Bearer token
+                        String authHeader = "Bearer " + config.getApiKey();
+                        requestBuilder.header("Authorization", authHeader);
+                    }
+                    
+                    java.net.http.HttpRequest request = requestBuilder
+                            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody))
+                            .build();
+                    
+                    // 发送请求
+                    java.net.http.HttpResponse<String> response = httpClient.send(
+                        request, 
+                        java.net.http.HttpResponse.BodyHandlers.ofString()
+                    );
+                    
+                    int statusCode = response.statusCode();
+                    String responseBody = response.body();
+                    
+                    // 检查状态码和响应内容
+                    if (statusCode == 200) {
+                        // 200 状态码，需要仔细检查响应内容是否真的有效
+                        if (responseBody == null || responseBody.trim().isEmpty()) {
+                            return false; // 空响应视为失败
+                        }
+                        
+                        // 检查响应中是否包含错误信息（JSON 格式）
+                        String lowerBody = responseBody.toLowerCase();
+                        if (lowerBody.contains("\"error\"") ||
+                            lowerBody.contains("\"message\"") && 
+                            (lowerBody.contains("invalid") || 
+                             lowerBody.contains("unauthorized") ||
+                             lowerBody.contains("api key") ||
+                             lowerBody.contains("authentication"))) {
+                            return false; // 响应包含错误信息
+                        }
+                        
+                        // 检查是否包含有效的响应结构（choices 或 response 字段）
+                        boolean hasValidStructure = false;
+                        if (config.getProvider().equals("ollama")) {
+                            // Ollama 响应应包含 "response" 字段
+                            hasValidStructure = responseBody.contains("\"response\"");
+                        } else {
+                            // DeepSeek/OpenAI 响应应包含 "choices" 字段
+                            hasValidStructure = responseBody.contains("\"choices\"");
+                        }
+                        
+                        if (!hasValidStructure) {
+                            return false; // 响应结构不正确
+                        }
+                        
+                        return true; // 成功
+                    } else if (statusCode == 401 || statusCode == 403) {
+                        // 认证失败
+                        return false;
+                    } else {
+                        // 其他错误状态码
+                        return false;
+                    }
+                    
+                } catch (Exception e) {
+                    // 任何异常都视为失败
+                    return false;
+                }
+            }
+        };
+        
+        // 任务完成后的处理
+        testTask.setOnSucceeded(e -> {
+            boolean success = testTask.getValue();
+            if (success) {
+                // 更新状态栏为"已连接{提供商名称}"
+                if (aiStatusLabel != null) {
+                    String providerName = formatProviderName(config.getProvider());
+                    String displayName = providerName != null && !providerName.isEmpty() 
+                        ? providerName : "AI";
+                    aiStatusLabel.setText("已连接" + displayName);
+                    aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
+                }
+                
+                statusLabel.setText("配置已保存，连接成功！");
+                statusLabel.setStyle("-fx-text-fill: #28a745; -fx-font-size: 12px;");
+                showAlert(Alert.AlertType.INFORMATION, "保存并测试成功", 
+                    "配置已保存，连接测试成功！\n\n模型: " + model + "\n接口: " + endpoint);
+                // 如果是在保存后测试，关闭对话框
+                if (afterSave && dialog != null) {
+                    dialog.close();
+                }
+            } else {
+                // 更新状态栏为"连接{模型名称}失败"
+                if (aiStatusLabel != null) {
+                    aiStatusLabel.setText("连接" + model + "失败");
+                    aiStatusLabel.setStyle("-fx-text-fill: #dc3545;");
+                }
+                
+                statusLabel.setText("配置已保存，但连接测试失败");
+                statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                showAlert(Alert.AlertType.WARNING, "保存成功但测试失败", 
+                    "配置已保存，但连接测试失败。\n\n" +
+                    "可能的原因：\n" +
+                    "1. API Key 无效或已过期\n" +
+                    "2. API 接口地址不正确\n" +
+                    "3. 网络连接问题\n" +
+                    "4. API 服务暂时不可用\n\n" +
+                    "请检查 API 接口地址和 API Key 是否正确。");
+            }
+        });
+        
+        testTask.setOnFailed(e -> {
+            Throwable throwable = testTask.getException();
+            String errorMsg = throwable != null ? throwable.getMessage() : "未知错误";
+            if (errorMsg == null || errorMsg.isEmpty()) {
+                errorMsg = throwable != null ? throwable.getClass().getSimpleName() : "未知错误";
+            }
+            
+            // 更新状态栏为"连接{模型名称}失败"
+            if (aiStatusLabel != null) {
+                aiStatusLabel.setText("连接" + model + "失败");
+                aiStatusLabel.setStyle("-fx-text-fill: #dc3545;");
+            }
+            
+            statusLabel.setText("配置已保存，但连接测试失败");
+            statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+            showAlert(Alert.AlertType.WARNING, "保存成功但测试失败", 
+                "配置已保存，但连接测试失败：\n\n" + errorMsg + 
+                "\n\n请检查 API 接口地址和 API Key 是否正确。");
+        });
+        
+        // 启动测试任务
+        new Thread(testTask).start();
+    }
+    
+    /**
+     * 初始化按钮悬停效果
+     */
+    private void initializeButtonHoverEffects() {
+        // 帮助按钮悬停效果
+        if (helpButton != null) {
+            helpButton.setOnMouseEntered(e -> helpButton.setStyle(
+                "-fx-pref-width: 90px; " +
+                "-fx-pref-height: 32px; " +
+                "-fx-background-color: #5a6268; " +
+                "-fx-text-fill: white; " +
+                "-fx-font-size: 13px; " +
+                "-fx-font-weight: bold; " +
+                "-fx-background-radius: 4px; " +
+                "-fx-cursor: hand; " +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 3, 0, 0, 2);"
+            ));
+            helpButton.setOnMouseExited(e -> helpButton.setStyle(
+                "-fx-pref-width: 90px; " +
+                "-fx-pref-height: 32px; " +
+                "-fx-background-color: #6c757d; " +
+                "-fx-text-fill: white; " +
+                "-fx-font-size: 13px; " +
+                "-fx-font-weight: bold; " +
+                "-fx-background-radius: 4px; " +
+                "-fx-cursor: hand; " +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"
+            ));
+        }
+        
+        // 配置 API 按钮悬停效果
+        if (configAIButton != null) {
+            configAIButton.setOnMouseEntered(e -> configAIButton.setStyle(
+                "-fx-pref-width: 110px; " +
+                "-fx-pref-height: 32px; " +
+                "-fx-background-color: #0056b3; " +
+                "-fx-text-fill: white; " +
+                "-fx-font-size: 13px; " +
+                "-fx-font-weight: bold; " +
+                "-fx-background-radius: 4px; " +
+                "-fx-cursor: hand; " +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 3, 0, 0, 2);"
+            ));
+            configAIButton.setOnMouseExited(e -> configAIButton.setStyle(
+                "-fx-pref-width: 110px; " +
+                "-fx-pref-height: 32px; " +
+                "-fx-background-color: #007bff; " +
+                "-fx-text-fill: white; " +
+                "-fx-font-size: 13px; " +
+                "-fx-font-weight: bold; " +
+                "-fx-background-radius: 4px; " +
+                "-fx-cursor: hand; " +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.2), 2, 0, 0, 1);"
+            ));
+        }
+    }
     
     /**
      * 帮助按钮的点击事件处理
@@ -1902,39 +2649,20 @@ public class MainController {
     }
     
     /**
-     * 带进度条的表格单元格
-     * 用于显示流量数值，背景显示进度条效果
-     * 根据流量占总带宽的比例动态切换颜色（绿/黄/红）
+     * 表格单元格
+     * 用于显示流量数值（无背景颜色）
      */
     private class ProgressBarTableCell extends TableCell<ProcessTrafficModel, Double> {
-        private final StackPane stackPane;
-        private final Region progressBar;
         private final Label valueLabel;
         private final boolean isDownload;
         
         public ProgressBarTableCell(boolean isDownload) {
             this.isDownload = isDownload;
             
-            // 创建进度条背景
-            progressBar = new Region();
-            progressBar.setStyle("-fx-background-color: linear-gradient(to right, #27AE60, #2ECC71); " +
-                                "-fx-background-radius: 4px;");
-            progressBar.setMaxHeight(Double.MAX_VALUE);
-            progressBar.setMaxWidth(Double.MAX_VALUE);
-            
             // 创建数值标签
             valueLabel = new Label();
             valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #2C3E50; -fx-font-weight: 600;");
             valueLabel.setAlignment(Pos.CENTER_RIGHT);
-            
-            // 创建堆叠面板
-            stackPane = new StackPane();
-            stackPane.setAlignment(Pos.CENTER_RIGHT);
-            stackPane.setPadding(new Insets(6, 12, 6, 12));
-            stackPane.getChildren().addAll(progressBar, valueLabel);
-            
-            // 添加样式类用于CSS控制
-            stackPane.getStyleClass().add("progress-bar-cell");
         }
         
         @Override
@@ -1944,7 +2672,6 @@ public class MainController {
             if (empty || item == null) {
                 setGraphic(null);
                 setText(null);
-                stackPane.getStyleClass().removeAll("low-traffic", "medium-traffic", "high-traffic");
             } else {
                 ProcessTrafficModel model = getTableView().getItems().get(getIndex());
                 if (model == null) {
@@ -1953,46 +2680,10 @@ public class MainController {
                     return;
                 }
                 
-                // 获取当前值和总速度
-                double currentValue = isDownload ? model.getDownloadSpeed() : model.getUploadSpeed();
-                double totalSpeed = model.getTotalSpeed();
-                
-                // 计算进度条宽度（基于总速度，最大100%）
-                // 使用表格中最大流量作为基准（简化处理，使用固定阈值）
-                double maxSpeed = HIGH_TRAFFIC_THRESHOLD * 2; // 2 MB/s 作为最大值
-                double progress = Math.min(totalSpeed / maxSpeed, 1.0);
-                
-                // 设置进度条宽度
-                progressBar.prefWidthProperty().bind(stackPane.widthProperty().multiply(progress));
-                
                 // 设置文本（右对齐）
                 valueLabel.setText(isDownload ? model.getFormattedDownloadSpeed() : model.getFormattedUploadSpeed());
                 
-                // 根据流量占总带宽的比例动态切换颜色
-                // 移除旧的样式类
-                stackPane.getStyleClass().removeAll("low-traffic", "medium-traffic", "high-traffic");
-                
-                // 计算流量占比（基于总速度）
-                double bandwidthRatio = totalSpeed / maxSpeed;
-                
-                if (bandwidthRatio > 0.7) {
-                    // 高流量（>70%）- 红色
-                    stackPane.getStyleClass().add("high-traffic");
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #E74C3C, #EC7063); " +
-                                        "-fx-background-radius: 4px;");
-                } else if (bandwidthRatio > 0.3) {
-                    // 中等流量（30%-70%）- 黄色
-                    stackPane.getStyleClass().add("medium-traffic");
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #F39C12, #F1C40F); " +
-                                        "-fx-background-radius: 4px;");
-                } else {
-                    // 低流量（<30%）- 绿色
-                    stackPane.getStyleClass().add("low-traffic");
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #27AE60, #2ECC71); " +
-                                        "-fx-background-radius: 4px;");
-                }
-                
-                setGraphic(stackPane);
+                setGraphic(valueLabel);
                 setText(null);
                 setAlignment(Pos.CENTER_RIGHT);
             }

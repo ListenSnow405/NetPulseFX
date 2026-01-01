@@ -109,8 +109,11 @@ public class AIService {
             .connectTimeout(Duration.ofSeconds(10))  // 连接超时：10秒
             .build();
     
-    /** 请求超时时间：30秒 */
+    /** 请求超时时间：30秒（用于普通流量分析） */
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    
+    /** 会话报告生成超时时间：90秒（用于生成详细的会话分析报告） */
+    private static final Duration SESSION_REPORT_TIMEOUT = Duration.ofSeconds(90);
     
     /** 时间格式化器 */
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -125,6 +128,15 @@ public class AIService {
      */
     public AIService(AIConfig config) {
         this.config = config;
+    }
+    
+    /**
+     * 获取 AI 配置对象
+     * 
+     * @return AIConfig 配置对象
+     */
+    public AIConfig getConfig() {
+        return config;
     }
     
     /**
@@ -359,6 +371,21 @@ public class AIService {
                 config.getModel(),
                 escapeJsonString(buildOllamaPrompt(userPrompt))
             );
+        } else if ("gemini".equalsIgnoreCase(provider)) {
+            // Gemini API 格式
+            // 将系统提示和用户提示合并为单个文本
+            String fullPrompt = SYSTEM_PROMPT + "\n\n" + userPrompt;
+            return String.format(
+                """
+                {
+                  "contents": [{
+                    "parts": [{
+                      "text": "%s"
+                    }]
+                  }]
+                }""",
+                escapeJsonString(fullPrompt)
+            );
         } else {
             // DeepSeek / OpenAI API 格式（Chat Completions API）
             return String.format(
@@ -410,6 +437,17 @@ public class AIService {
      * @return HttpRequest 对象
      */
     private HttpRequest buildHttpRequest(String requestBody) {
+        return buildHttpRequest(requestBody, REQUEST_TIMEOUT);
+    }
+    
+    /**
+     * 构建 HTTP 请求（支持自定义超时时间）
+     * 
+     * @param requestBody 请求体 JSON
+     * @param timeout 超时时间
+     * @return HttpRequest 对象
+     */
+    private HttpRequest buildHttpRequest(String requestBody, Duration timeout) {
         // 清理端点 URL（去除可能的引号和空白字符）
         String endpoint = config.getApiEndpoint().trim();
         // 去除首尾引号（如果存在）
@@ -428,9 +466,24 @@ public class AIService {
                     config.getApiEndpoint()), e);
         }
         
+        // Gemini API 支持两种方式传递 API Key：
+        // 1. 查询参数：?key=API_KEY（当前实现）
+        // 2. 请求头：x-goog-api-key: API_KEY（更推荐，更安全）
+        // 根据文档：https://ai.google.dev/gemini-api/docs/api-key
+        URI finalUri = uri;
+        if ("gemini".equalsIgnoreCase(config.getProvider()) && 
+            config.getApiKey() != null && !config.getApiKey().isEmpty()) {
+            // 方式1：使用查询参数（兼容旧代码）
+            // String uriString = uri.toString();
+            // String separator = uriString.contains("?") ? "&" : "?";
+            // finalUri = URI.create(uriString + separator + "key=" + config.getApiKey());
+            // 方式2：使用请求头（推荐，更安全，符合文档示例）
+            // 不修改 URI，将在下面通过请求头传递
+        }
+        
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(uri)
-                .timeout(REQUEST_TIMEOUT)
+                .uri(finalUri)
+                .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody));
         
@@ -439,6 +492,9 @@ public class AIService {
             if ("ollama".equalsIgnoreCase(config.getProvider())) {
                 // Ollama 通常不需要 API 密钥，但有些配置可能需要
                 // 这里可以根据实际情况调整
+            } else if ("gemini".equalsIgnoreCase(config.getProvider())) {
+                // Gemini 使用 x-goog-api-key 请求头（根据官方文档）
+                builder.header("x-goog-api-key", config.getApiKey());
             } else {
                 // DeepSeek / OpenAI 使用 Bearer Token
                 builder.header("Authorization", "Bearer " + config.getApiKey());
@@ -495,6 +551,9 @@ public class AIService {
         if ("ollama".equalsIgnoreCase(provider)) {
             // Ollama 响应格式：{"response": "..."}
             return extractOllamaResponse(responseBody);
+        } else if ("gemini".equalsIgnoreCase(provider)) {
+            // Gemini 响应格式：{"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
+            return extractGeminiResponse(responseBody);
         } else {
             // DeepSeek / OpenAI 响应格式：{"choices": [{"message": {"content": "..."}}]}
             return extractChatCompletionResponse(responseBody);
@@ -519,6 +578,76 @@ public class AIService {
             return "错误：无法解析 Ollama API 响应。响应内容：\n" + responseBody;
         } catch (Exception e) {
             return "错误：解析 Ollama API 响应时发生异常：\n" + e.getMessage();
+        }
+    }
+    
+    /**
+     * 提取 Gemini API 响应内容
+     */
+    private String extractGeminiResponse(String responseBody) {
+        try {
+            // Gemini 响应格式：{"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
+            int candidatesStart = responseBody.indexOf("\"candidates\":");
+            if (candidatesStart == -1) {
+                return "错误：响应格式不正确。响应内容：\n" + responseBody;
+            }
+            
+            int contentStart = responseBody.indexOf("\"content\":", candidatesStart);
+            if (contentStart == -1) {
+                return "错误：响应中未找到 content 字段。响应内容：\n" + responseBody;
+            }
+            
+            int partsStart = responseBody.indexOf("\"parts\":", contentStart);
+            if (partsStart == -1) {
+                return "错误：响应中未找到 parts 字段。响应内容：\n" + responseBody;
+            }
+            
+            int textStart = responseBody.indexOf("\"text\":\"", partsStart) + 8;
+            if (textStart <= 7) {
+                return "错误：响应中未找到 text 字段。响应内容：\n" + responseBody;
+            }
+            
+            // 查找 text 字符串的结束位置（考虑转义）
+            int textEnd = textStart;
+            boolean escaped = false;
+            for (int i = textStart; i < responseBody.length(); i++) {
+                char c = responseBody.charAt(i);
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') {
+                    // 检查是否是字符串结束（下一个字符应该是 , 或 }）
+                    if (i + 1 < responseBody.length()) {
+                        char next = responseBody.charAt(i + 1);
+                        if (next == ',' || next == '}' || next == ']') {
+                            textEnd = i;
+                            break;
+                        }
+                    } else {
+                        textEnd = i;
+                        break;
+                    }
+                }
+            }
+            
+            if (textEnd <= textStart) {
+                return "错误：无法定位响应内容的结束位置。响应内容：\n" + responseBody;
+            }
+            
+            String content = responseBody.substring(textStart, textEnd);
+            // 处理转义字符
+            return content.replace("\\n", "\n")
+                         .replace("\\\"", "\"")
+                         .replace("\\\\", "\\")
+                         .replace("\\r", "\r")
+                         .replace("\\t", "\t");
+        } catch (Exception e) {
+            return "错误：解析 Gemini API 响应时发生异常：\n" + e.getMessage() + "\n\n响应内容：\n" + responseBody;
         }
     }
     
@@ -644,10 +773,10 @@ public class AIService {
                 // 根据 API 提供商构建请求体（使用会话分析专用的 System Prompt）
                 String requestBody = buildRequestBodyWithSystemPrompt(userPrompt, SESSION_ANALYSIS_SYSTEM_PROMPT);
                 
-                // 构建 HTTP 请求
-                HttpRequest request = buildHttpRequest(requestBody);
+                // 构建 HTTP 请求（使用更长的超时时间）
+                HttpRequest request = buildHttpRequest(requestBody, SESSION_REPORT_TIMEOUT);
                 
-                System.out.println("[AIService] 正在发送会话分析请求...");
+                System.out.println("[AIService] 正在发送会话分析请求（超时时间: " + SESSION_REPORT_TIMEOUT.getSeconds() + " 秒）...");
                 
                 // 发送异步请求并获取响应
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -657,6 +786,31 @@ public class AIService {
                 // 解析响应
                 return parseResponse(response);
                 
+            } catch (java.net.http.HttpTimeoutException e) {
+                System.err.println("[AIService] 会话分析请求超时: " + e.getMessage());
+                return "**错误：请求超时（" + SESSION_REPORT_TIMEOUT.getSeconds() + " 秒）**\n\n" +
+                       "可能的原因：\n" +
+                       "1. 会话数据量较大，AI 处理时间较长\n" +
+                       "2. API 服务器响应时间过长\n" +
+                       "3. 网络连接较慢\n" +
+                       "4. API 端点地址不正确\n\n" +
+                       "建议：\n" +
+                       "- 检查网络连接\n" +
+                       "- 尝试减少会话数据量\n" +
+                       "- 稍后重试";
+                       
+            } catch (java.net.ConnectException e) {
+                System.err.println("[AIService] 会话分析连接失败: " + e.getMessage());
+                System.err.println("  Endpoint: " + config.getApiEndpoint());
+                return "**错误：无法连接到 API 服务器**\n\n" +
+                       "详细信息：\n" +
+                       "- 端点: " + config.getApiEndpoint() + "\n" +
+                       "- 错误: " + e.getMessage() + "\n\n" +
+                       "请检查：\n" +
+                       "1. API 端点地址是否正确\n" +
+                       "2. 网络连接是否正常\n" +
+                       "3. 防火墙是否阻止了连接";
+                       
             } catch (Exception e) {
                 System.err.println("[AIService] 生成会话分析报告时发生异常: " + e.getClass().getName());
                 e.printStackTrace();
@@ -922,7 +1076,70 @@ public class AIService {
     /**
      * 使用指定的 System Prompt 构建请求体
      */
+    /**
+     * 构建带系统提示词的请求体（用于会话分析）
+     */
     private String buildRequestBodyWithSystemPrompt(String userPrompt, String systemPrompt) {
+        String provider = config.getProvider();
+        
+        if ("ollama".equalsIgnoreCase(provider)) {
+            // Ollama API 格式
+            return String.format(
+                """
+                {
+                  "model": "%s",
+                  "prompt": "%s",
+                  "stream": false
+                }""",
+                config.getModel(),
+                escapeJsonString(systemPrompt + "\n\n" + userPrompt)
+            );
+        } else if ("gemini".equalsIgnoreCase(provider)) {
+            // Gemini API 格式
+            String fullPrompt = systemPrompt + "\n\n" + userPrompt;
+            return String.format(
+                """
+                {
+                  "contents": [{
+                    "parts": [{
+                      "text": "%s"
+                    }]
+                  }]
+                }""",
+                escapeJsonString(fullPrompt)
+            );
+        } else {
+            // DeepSeek / OpenAI API 格式（Chat Completions API）
+            return String.format(
+                """
+                {
+                  "model": "%s",
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": "%s"
+                    },
+                    {
+                      "role": "user",
+                      "content": "%s"
+                    }
+                  ],
+                  "temperature": 0.7,
+                  "max_tokens": 4000
+                }""",
+                config.getModel(),
+                escapeJsonString(systemPrompt),
+                escapeJsonString(userPrompt)
+            );
+        }
+    }
+    
+    /**
+     * 构建带系统提示词的请求体（旧方法，保留以兼容）
+     * @deprecated 使用 buildRequestBodyWithSystemPrompt 代替
+     */
+    @Deprecated
+    private String buildRequestBodyWithSystemPromptOld(String userPrompt, String systemPrompt) {
         String provider = config.getProvider();
         
         if ("ollama".equalsIgnoreCase(provider)) {

@@ -113,8 +113,12 @@ public class MarkdownToHtmlConverter {
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
+                    /* Emoji 字体回退链 */
+                    * {
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Emoji", "Segoe UI Symbol", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
+                    }
+                    
                     body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
                         font-size: 14px;
                         line-height: 1.6;
                         color: #2c3e50;
@@ -125,6 +129,14 @@ public class MarkdownToHtmlConverter {
                         /* 确保 Emoji 和特殊符号正确显示 */
                         font-feature-settings: "liga" 1, "calt" 1;
                         text-rendering: optimizeLegibility;
+                        /* 启用 Emoji 渲染 */
+                        -webkit-font-smoothing: antialiased;
+                        -moz-osx-font-smoothing: grayscale;
+                    }
+                    
+                    /* 确保代码块使用等宽字体（不包含 Emoji 字体） */
+                    code, pre {
+                        font-family: "Consolas", "Monaco", "Courier New", monospace;
                     }
                     
                     h1 {

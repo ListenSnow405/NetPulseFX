@@ -1,10 +1,13 @@
 package com.netpulse.netpulsefx;
 
 import com.netpulse.netpulsefx.service.DatabaseService;
+import com.netpulse.netpulsefx.service.SystemCheckService;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
 import javafx.stage.Stage;
 
 import java.io.IOException;
@@ -68,6 +71,26 @@ public class HelloApplication extends Application {
      */
     @Override
     public void start(Stage stage) throws IOException {
+        // 系统权限和驱动检查
+        SystemCheckService.CheckResult checkResult = SystemCheckService.checkSystemRequirements();
+        if (!checkResult.isPassed()) {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("系统检查警告");
+            alert.setHeaderText("系统环境检查失败");
+            alert.setContentText(checkResult.getMessage());
+            
+            // 添加"查看帮助"按钮
+            ButtonType helpButton = new ButtonType("查看帮助");
+            ButtonType continueButton = new ButtonType("继续运行");
+            alert.getButtonTypes().setAll(helpButton, continueButton);
+            
+            ButtonType result = alert.showAndWait().orElse(continueButton);
+            if (result == helpButton) {
+                // 打开帮助中心
+                openHelpCenter(stage);
+            }
+        }
+        
         // 如果数据库初始化失败，显示错误提示
         if (databaseService == null || databaseService.getConnection() == null) {
             Alert alert = new Alert(Alert.AlertType.WARNING);
@@ -76,6 +99,9 @@ public class HelloApplication extends Application {
             alert.setContentText("应用程序将继续运行，但流量历史数据将无法保存。\n" +
                     "请检查控制台输出的错误信息。");
             alert.showAndWait();
+        } else {
+            // 数据库自动清理（在后台执行）
+            databaseService.performAutoCleanup();
         }
         
         // 加载主界面 FXML 文件
@@ -88,6 +114,23 @@ public class HelloApplication extends Application {
         stage.setMaximized(true);
         
         stage.show();
+    }
+    
+    /**
+     * 打开帮助中心窗口
+     */
+    private void openHelpCenter(Stage parentStage) {
+        try {
+            FXMLLoader fxmlLoader = new FXMLLoader(HelloApplication.class.getResource("help-view.fxml"));
+            Stage helpStage = new Stage();
+            helpStage.setTitle("帮助中心 - NetPulse FX");
+            helpStage.setScene(new Scene(fxmlLoader.load(), 1000, 700));
+            helpStage.setMinWidth(800);
+            helpStage.setMinHeight(500);
+            helpStage.show();
+        } catch (IOException e) {
+            System.err.println("无法打开帮助中心: " + e.getMessage());
+        }
     }
     
     /**

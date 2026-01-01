@@ -54,13 +54,14 @@ public class AIConfig {
     
     /**
      * 创建默认的 OpenAI 配置
+     * 使用最新的 gpt-4o 模型
      */
     public static AIConfig defaultOpenAI() {
         return new AIConfig(
             "openai",
             "https://api.openai.com/v1/chat/completions",
             "",  // 需要在配置中设置
-            "gpt-3.5-turbo"
+            "gpt-4o"
         );
     }
     
@@ -73,6 +74,21 @@ public class AIConfig {
             "http://localhost:11434/api/generate",
             "",  // Ollama 通常不需要密钥
             "llama2"  // 或其他本地模型
+        );
+    }
+    
+    /**
+     * 创建默认的 Gemini 配置
+     * 使用最新的 gemini-2.5-flash 模型（根据 Google AI Studio 文档）
+     * API 端点格式：https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+     * 参考：https://ai.google.dev/gemini-api/docs/api-key
+     */
+    public static AIConfig defaultGemini() {
+        return new AIConfig(
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "",  // 需要在配置中设置
+            "gemini-2.5-flash"
         );
     }
     
