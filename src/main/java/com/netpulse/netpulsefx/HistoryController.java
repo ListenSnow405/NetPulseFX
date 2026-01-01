@@ -937,22 +937,86 @@ public class HistoryController {
             return;
         }
         
-        // 使用 FileChooser 选择保存路径
-        FileChooser fileChooser = new FileChooser();
-        fileChooser.setTitle("导出 Excel 文件");
-        fileChooser.getExtensionFilters().add(
-            new FileChooser.ExtensionFilter("Excel 文件", "*.xlsx")
-        );
-        fileChooser.setInitialFileName("会话_" + selectedSession.getSessionId() + "_" + 
-            new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + ".xlsx");
+        // 异步查询会话信息以获取网卡名称
+        Task<String> prepareFileNameTask = new Task<String>() {
+            @Override
+            protected String call() throws Exception {
+                // 查询会话信息
+                List<DatabaseService.MonitoringSession> sessions = databaseService.getAllSessions().get();
+                DatabaseService.MonitoringSession session = sessions.stream()
+                        .filter(s -> s.getSessionId() == selectedSession.getSessionId())
+                        .findFirst()
+                        .orElse(null);
+                
+                if (session == null) {
+                    throw new Exception("会话不存在: session_id=" + selectedSession.getSessionId());
+                }
+                
+                // 生成文件名：NetPulse_Data_[网卡名]_Session[ID]_[yyyyMMdd_HHmm].xlsx
+                String ifaceName = session.getIfaceName() != null ? session.getIfaceName() : "Unknown";
+                // 过滤网卡名称中的非法字符（如 \ 或 /）
+                ifaceName = sanitizeFileName(ifaceName);
+                
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmm").format(new Date());
+                String fileName = String.format("NetPulse_Data_%s_Session%d_%s.xlsx", 
+                    ifaceName, session.getSessionId(), timestamp);
+                
+                return fileName;
+            }
+        };
         
-        Stage stage = (Stage) exportExcelButton.getScene().getWindow();
-        File file = fileChooser.showSaveDialog(stage);
+        // 文件名准备完成后，显示文件选择对话框
+        prepareFileNameTask.setOnSucceeded(e -> {
+            String defaultFileName = prepareFileNameTask.getValue();
+            
+            // 在状态栏显示准备信息
+            if (statusLabel != null) {
+                statusLabel.setText("已准备好导出文件：" + defaultFileName);
+            }
+            
+            // 使用 FileChooser 选择保存路径
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.setTitle("导出 Excel 文件");
+            fileChooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("Excel 文件", "*.xlsx")
+            );
+            fileChooser.setInitialFileName(defaultFileName);
+            
+            Stage stage = (Stage) exportExcelButton.getScene().getWindow();
+            File file = fileChooser.showSaveDialog(stage);
+            
+            if (file == null) {
+                return; // 用户取消了选择
+            }
+            
+            // 执行导出
+            executeExcelExport(selectedSession, file);
+        });
         
-        if (file == null) {
-            return; // 用户取消了选择
+        prepareFileNameTask.setOnFailed(e -> {
+            Throwable exception = prepareFileNameTask.getException();
+            String errorMsg = exception != null ? exception.getMessage() : "未知错误";
+            showAlert(Alert.AlertType.ERROR, "准备导出失败", 
+                "准备导出文件时发生错误：\n" + errorMsg);
+            if (statusLabel != null) {
+                statusLabel.setText("准备导出失败: " + errorMsg);
+            }
+        });
+        
+        // 启动准备任务
+        Thread prepareThread = new Thread(prepareFileNameTask);
+        prepareThread.setDaemon(true);
+        prepareThread.start();
+        
+        if (statusLabel != null) {
+            statusLabel.setText("正在准备导出文件...");
         }
-        
+    }
+    
+    /**
+     * 执行 Excel 导出
+     */
+    private void executeExcelExport(SessionDisplay selectedSession, File file) {
         // 异步执行导出任务
         Task<Void> exportTask = new Task<>() {
             @Override
@@ -1037,25 +1101,49 @@ public class HistoryController {
         
         String aiReportContent = currentAIDiagnosisReport;
         
+        // 生成文件名：NetPulse_Report_[AI模型名]_[yyyyMMdd_HHmm].pdf
+        String modelName = "未知模型";
+        // 从全局配置管理器获取 AI 模型名称
+        com.netpulse.netpulsefx.service.AIConfigManager configManager = 
+            com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
+        if (configManager.isConfigured()) {
+            com.netpulse.netpulsefx.model.AIConfig config = configManager.getConfig();
+            if (config != null && config.getModel() != null) {
+                modelName = config.getModel();
+            }
+        } else if (aiService != null && aiService.getConfig() != null) {
+            modelName = aiService.getConfig().getModel();
+        }
+        
+        // 智能识别 Gemini 2.5 模型，统一显示为 "Gemini_2.5"
+        String modelLower = modelName.toLowerCase();
+        if (modelLower.contains("gemini-2.5") || modelLower.contains("gemini 2.5")) {
+            // 提取版本信息（flash 或 pro）
+            if (modelLower.contains("pro")) {
+                modelName = "Gemini_2.5_Pro";
+            } else {
+                modelName = "Gemini_2.5_Flash";
+            }
+        }
+        
+        // 清理模型名称中的特殊字符，确保文件名合法
+        modelName = sanitizeFileName(modelName);
+        
+        // 时间戳格式：yyyyMMdd_HHmm（精确到分钟）
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmm").format(new Date());
+        String defaultFileName = String.format("NetPulse_Report_%s_%s.pdf", modelName, timestamp);
+        
+        // 在状态栏显示准备信息
+        if (statusLabel != null) {
+            statusLabel.setText("已准备好导出文件：" + defaultFileName);
+        }
+        
         // 使用 FileChooser 选择保存路径
         FileChooser fileChooser = new FileChooser();
         fileChooser.setTitle("导出 PDF 文件");
         fileChooser.getExtensionFilters().add(
             new FileChooser.ExtensionFilter("PDF 文件", "*.pdf")
         );
-        
-        // 智能命名：包含模型名称和精确到分钟的时间戳
-        String modelName = "未知模型";
-        if (aiService != null && aiService.getConfig() != null) {
-            modelName = aiService.getConfig().getModel();
-            // 清理模型名称中的特殊字符，确保文件名合法
-            modelName = modelName.replaceAll("[^a-zA-Z0-9_-]", "_");
-        }
-        
-        // 时间戳格式：yyyyMMdd_HHmm（精确到分钟）
-        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmm").format(new Date());
-        String defaultFileName = String.format("AI报告_%s_%s.pdf", modelName, timestamp);
-        
         fileChooser.setInitialFileName(defaultFileName);
         
         Stage stage = (Stage) exportPDFButton.getScene().getWindow();
@@ -1065,6 +1153,14 @@ public class HistoryController {
             return; // 用户取消了选择
         }
         
+        // 执行导出
+        executePDFExport(selectedSession, aiReportContent, file);
+    }
+    
+    /**
+     * 执行 PDF 导出
+     */
+    private void executePDFExport(SessionDisplay selectedSession, String aiReportContent, File file) {
         // 异步执行导出任务
         Task<Void> exportTask = new Task<>() {
             @Override
@@ -1162,14 +1258,22 @@ public class HistoryController {
     
     /**
      * 初始化 AI 服务
-     * 优先使用全局配置管理器中的配置，如果没有则从环境变量读取
+     * 优先从保存的配置文件加载，然后使用全局配置管理器中的配置，最后从环境变量读取
      */
     private void initializeAIService() {
         try {
-            // 首先尝试从全局配置管理器获取配置
+            // 首先尝试从文件加载配置
             com.netpulse.netpulsefx.service.AIConfigManager configManager = 
                 com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
             
+            if (configManager.loadConfigFromFile()) {
+                // 成功从文件加载配置
+                aiService = configManager.getAIService();
+                System.out.println("[HistoryController] AI 服务已初始化（从配置文件加载）");
+                return;
+            }
+            
+            // 如果文件加载失败，检查全局配置管理器是否有配置
             if (configManager.isConfigured()) {
                 aiService = configManager.getAIService();
                 System.out.println("[HistoryController] AI 服务已初始化（使用全局配置管理器）");
@@ -2607,6 +2711,38 @@ public class HistoryController {
                 setText(String.format(format, item));
             }
         }
+    }
+    
+    /**
+     * 过滤文件名中的非法字符
+     * 移除 Windows/Linux 文件系统中不允许的字符：< > : " / \ | ? *
+     * 
+     * @param fileName 原始文件名
+     * @return 清理后的文件名
+     */
+    private String sanitizeFileName(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return "Unknown";
+        }
+        
+        // 移除或替换非法字符
+        String sanitized = fileName
+            .replaceAll("[<>:\"/\\\\|?*]", "_")  // 替换所有非法字符为下划线
+            .replaceAll("\\s+", "_")            // 将多个连续空格替换为单个下划线
+            .replaceAll("_{2,}", "_")           // 将多个连续下划线替换为单个下划线
+            .replaceAll("^_+|_+$", "");         // 移除首尾下划线
+        
+        // 如果清理后为空，使用默认值
+        if (sanitized.isEmpty()) {
+            sanitized = "Unknown";
+        }
+        
+        // 限制文件名长度（Windows 路径限制）
+        if (sanitized.length() > 100) {
+            sanitized = sanitized.substring(0, 100);
+        }
+        
+        return sanitized;
     }
     
     /**

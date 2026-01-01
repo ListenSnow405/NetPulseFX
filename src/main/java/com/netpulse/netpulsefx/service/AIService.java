@@ -583,12 +583,44 @@ public class AIService {
     
     /**
      * 提取 Gemini API 响应内容
+     * 支持处理 Google API 的错误响应（SAFETY、RECITATION 等）
      */
     private String extractGeminiResponse(String responseBody) {
         try {
+            // 首先检查是否有错误信息
+            if (responseBody.contains("\"error\"")) {
+                return extractGeminiError(responseBody);
+            }
+            
+            // 检查是否有安全过滤错误（SAFETY）
+            if (responseBody.contains("\"safetyRatings\"") || responseBody.contains("\"blockReason\"")) {
+                String safetyError = extractGeminiSafetyError(responseBody);
+                if (safetyError != null) {
+                    return safetyError;
+                }
+            }
+            
+            // 检查是否有引用限制错误（RECITATION）
+            if (responseBody.contains("\"recitation\"")) {
+                String recitationError = extractGeminiRecitationError(responseBody);
+                if (recitationError != null) {
+                    return recitationError;
+                }
+            }
+            
             // Gemini 响应格式：{"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
             int candidatesStart = responseBody.indexOf("\"candidates\":");
             if (candidatesStart == -1) {
+                // 检查是否有 candidates 但为空数组（可能被安全过滤）
+                if (responseBody.contains("\"candidates\":[]") || responseBody.contains("\"candidates\": []")) {
+                    return "错误：响应被安全过滤器阻止。\n\n" +
+                           "可能的原因：\n" +
+                           "1. 输入内容触发了 Google 的安全策略\n" +
+                           "2. 请求内容可能包含敏感信息\n\n" +
+                           "建议：\n" +
+                           "- 检查输入内容是否包含敏感或不当信息\n" +
+                           "- 尝试调整请求内容后重试";
+                }
                 return "错误：响应格式不正确。响应内容：\n" + responseBody;
             }
             
@@ -604,6 +636,14 @@ public class AIService {
             
             int textStart = responseBody.indexOf("\"text\":\"", partsStart) + 8;
             if (textStart <= 7) {
+                // 可能没有 text 字段，检查是否有 finishReason
+                int finishReasonStart = responseBody.indexOf("\"finishReason\":", partsStart);
+                if (finishReasonStart != -1) {
+                    String finishReason = extractFinishReason(responseBody, finishReasonStart);
+                    if (finishReason != null) {
+                        return finishReason;
+                    }
+                }
                 return "错误：响应中未找到 text 字段。响应内容：\n" + responseBody;
             }
             
@@ -648,6 +688,150 @@ public class AIService {
                          .replace("\\t", "\t");
         } catch (Exception e) {
             return "错误：解析 Gemini API 响应时发生异常：\n" + e.getMessage() + "\n\n响应内容：\n" + responseBody;
+        }
+    }
+    
+    /**
+     * 提取 Gemini API 错误信息
+     */
+    private String extractGeminiError(String responseBody) {
+        try {
+            // 查找 error 对象
+            int errorStart = responseBody.indexOf("\"error\":");
+            if (errorStart == -1) {
+                return null;
+            }
+            
+            // 查找 message 字段
+            int messageStart = responseBody.indexOf("\"message\":\"", errorStart);
+            if (messageStart != -1) {
+                messageStart += 12;
+                int messageEnd = responseBody.indexOf("\"", messageStart);
+                if (messageEnd > messageStart) {
+                    String message = responseBody.substring(messageStart, messageEnd);
+                    return "错误：Gemini API 返回错误\n\n" + message;
+                }
+            }
+            
+            // 查找 code 字段
+            int codeStart = responseBody.indexOf("\"code\":", errorStart);
+            if (codeStart != -1) {
+                int codeValueStart = responseBody.indexOf("\"", codeStart + 7) + 1;
+                int codeValueEnd = responseBody.indexOf("\"", codeValueStart);
+                if (codeValueEnd > codeValueStart) {
+                    String code = responseBody.substring(codeValueStart, codeValueEnd);
+                    return "错误：Gemini API 错误代码 " + code + "\n\n响应内容：\n" + 
+                           (responseBody.length() > 500 ? responseBody.substring(0, 500) + "..." : responseBody);
+                }
+            }
+            
+            return "错误：Gemini API 返回错误\n\n响应内容：\n" + 
+                   (responseBody.length() > 500 ? responseBody.substring(0, 500) + "..." : responseBody);
+        } catch (Exception e) {
+            return "错误：解析 Gemini API 错误响应时发生异常：\n" + e.getMessage();
+        }
+    }
+    
+    /**
+     * 提取 Gemini 安全过滤错误（SAFETY）
+     */
+    private String extractGeminiSafetyError(String responseBody) {
+        try {
+            // 查找 blockReason
+            int blockReasonStart = responseBody.indexOf("\"blockReason\":");
+            if (blockReasonStart != -1) {
+                int valueStart = responseBody.indexOf("\"", blockReasonStart + 14) + 1;
+                int valueEnd = responseBody.indexOf("\"", valueStart);
+                if (valueEnd > valueStart) {
+                    String blockReason = responseBody.substring(valueStart, valueEnd);
+                    return "错误：内容被安全过滤器阻止\n\n" +
+                           "阻止原因：" + blockReason + "\n\n" +
+                           "可能的原因：\n" +
+                           "1. 输入内容触发了 Google 的安全策略\n" +
+                           "2. 请求内容可能包含敏感、有害或不当信息\n" +
+                           "3. 内容可能违反 Google 的使用政策\n\n" +
+                           "建议：\n" +
+                           "- 检查并修改输入内容，避免敏感或不当信息\n" +
+                           "- 尝试使用更中性的描述方式\n" +
+                           "- 如果问题持续，请联系 Google AI 支持";
+                }
+            }
+            
+            // 查找 safetyRatings
+            if (responseBody.contains("\"safetyRatings\"")) {
+                return "错误：内容被安全过滤器阻止\n\n" +
+                       "可能的原因：\n" +
+                       "1. 输入内容触发了 Google 的安全策略\n" +
+                       "2. 请求内容可能包含敏感或不当信息\n\n" +
+                       "建议：\n" +
+                       "- 检查输入内容是否包含敏感或不当信息\n" +
+                       "- 尝试调整请求内容后重试";
+            }
+            
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    /**
+     * 提取 Gemini 引用限制错误（RECITATION）
+     */
+    private String extractGeminiRecitationError(String responseBody) {
+        try {
+            if (responseBody.contains("\"recitation\"")) {
+                return "错误：内容触发引用限制\n\n" +
+                       "可能的原因：\n" +
+                       "1. 响应内容可能包含受版权保护的内容\n" +
+                       "2. 内容可能过于接近某些受保护的材料\n\n" +
+                       "建议：\n" +
+                       "- 尝试重新表述请求，避免直接引用受保护内容\n" +
+                       "- 使用更通用的描述方式\n" +
+                       "- 如果问题持续，请调整请求内容";
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    /**
+     * 提取 finishReason（用于判断响应完成的原因）
+     */
+    private String extractFinishReason(String responseBody, int finishReasonStart) {
+        try {
+            int valueStart = responseBody.indexOf("\"", finishReasonStart + 15) + 1;
+            int valueEnd = responseBody.indexOf("\"", valueStart);
+            if (valueEnd > valueStart) {
+                String reason = responseBody.substring(valueStart, valueEnd);
+                
+                // 根据 finishReason 返回相应的错误信息
+                if ("SAFETY".equalsIgnoreCase(reason)) {
+                    return "错误：响应因安全原因被阻止\n\n" +
+                           "可能的原因：\n" +
+                           "1. 生成的内容触发了 Google 的安全策略\n" +
+                           "2. 内容可能包含敏感或不当信息\n\n" +
+                           "建议：\n" +
+                           "- 检查输入内容，避免敏感或不当信息\n" +
+                           "- 尝试调整请求内容后重试";
+                } else if ("RECITATION".equalsIgnoreCase(reason)) {
+                    return "错误：响应因引用限制被阻止\n\n" +
+                           "可能的原因：\n" +
+                           "1. 生成的内容可能包含受版权保护的内容\n" +
+                           "2. 内容过于接近某些受保护的材料\n\n" +
+                           "建议：\n" +
+                           "- 尝试重新表述请求\n" +
+                           "- 使用更通用的描述方式";
+                } else if ("MAX_TOKENS".equalsIgnoreCase(reason)) {
+                    return "错误：响应因达到最大令牌数限制而停止\n\n" +
+                           "建议：\n" +
+                           "- 响应内容可能较长，已自动截断\n" +
+                           "- 如果需要完整内容，请尝试分段请求";
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
         }
     }
     

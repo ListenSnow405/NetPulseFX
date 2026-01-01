@@ -150,7 +150,7 @@ public class ExportService {
             // 创建表头
             Row recordsHeaderRow = recordsSheet.createRow(0);
             String[] recordHeaders = {"序号", "时间", "下行速度 (KB/s)", "上行速度 (KB/s)", 
-                    "源IP", "目标IP", "进程名称"};
+                    "源IP", "目标IP", "进程名称", "协议"};
             for (int i = 0; i < recordHeaders.length; i++) {
                 Cell cell = recordsHeaderRow.createCell(i);
                 cell.setCellValue(recordHeaders[i]);
@@ -197,6 +197,11 @@ public class ExportService {
                 Cell cell6 = row.createCell(6);
                 cell6.setCellValue(record.getProcessName() != null ? record.getProcessName() : "未知进程");
                 cell6.setCellStyle(dataStyle);
+                
+                // 协议
+                Cell cell7 = row.createCell(7);
+                cell7.setCellValue(record.getProtocol() != null ? record.getProtocol() : "");
+                cell7.setCellStyle(dataStyle);
             }
             
             // 自动调整列宽

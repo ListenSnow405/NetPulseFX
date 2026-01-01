@@ -39,6 +39,25 @@ public class AIConfigManager {
         this.currentConfig = config;
         this.aiService = new AIService(config);
         System.out.println("[AIConfigManager] AI 配置已更新: " + config);
+        
+        // 自动保存配置到文件
+        AIConfigPersistenceService.saveConfig(config);
+    }
+    
+    /**
+     * 从文件加载配置
+     * 
+     * @return true 如果成功加载配置，false 否则
+     */
+    public synchronized boolean loadConfigFromFile() {
+        AIConfig config = AIConfigPersistenceService.loadConfig();
+        if (config != null) {
+            this.currentConfig = config;
+            this.aiService = new AIService(config);
+            System.out.println("[AIConfigManager] 已从文件加载配置: " + config);
+            return true;
+        }
+        return false;
     }
     
     /**

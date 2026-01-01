@@ -507,15 +507,25 @@ public class MainController {
     
     /**
      * 初始化 AI 服务
-     * 从环境变量读取配置并创建 AIService 实例
+     * 优先从保存的配置文件加载，然后从环境变量读取配置并创建 AIService 实例
      * 同时更新全局配置管理器
      */
     private void initializeAIService() {
         try {
-            // 首先检查全局配置管理器是否有配置
+            // 首先尝试从文件加载配置
             com.netpulse.netpulsefx.service.AIConfigManager configManager = 
                 com.netpulse.netpulsefx.service.AIConfigManager.getInstance();
             
+            if (configManager.loadConfigFromFile()) {
+                // 成功从文件加载配置
+                aiService = configManager.getAIService();
+                AIConfig config = configManager.getConfig();
+                aiProviderName = formatProviderName(config.getProvider());
+                System.out.println("[MainController] AI 服务已初始化（从配置文件加载）");
+                return;
+            }
+            
+            // 如果文件加载失败，检查全局配置管理器是否有配置
             if (configManager.isConfigured()) {
                 aiService = configManager.getAIService();
                 AIConfig config = configManager.getConfig();
@@ -1072,22 +1082,49 @@ public class MainController {
         grid.setPadding(new Insets(20, 20, 10, 20));
         
         // 模型名称下拉框
-        ComboBox<String> modelComboBox = new ComboBox<>();
+        // 使用 AIModel 枚举创建模型选择下拉框
+        ComboBox<com.netpulse.netpulsefx.model.AIModel> modelComboBox = 
+            new ComboBox<>();
+        
+        // 添加所有可用模型（排除自定义模型，稍后单独添加）
         modelComboBox.getItems().addAll(
-            "deepseek-chat",
-            "gpt-4o",
-            "gpt-4-turbo",
-            "gpt-4",
-            "gpt-3.5-turbo",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-pro",
-            "llama2",
-            "llama3",
-            "custom"
+            com.netpulse.netpulsefx.model.AIModel.getAvailableModels()
         );
+        
+        // 添加自定义模型选项
+        modelComboBox.getItems().add(com.netpulse.netpulsefx.model.AIModel.CUSTOM);
+        
         modelComboBox.setPromptText("请选择模型");
+        
+        // 设置自定义 ListCell，显示带类别标签的模型名称
+        modelComboBox.setCellFactory(listView -> new javafx.scene.control.ListCell<com.netpulse.netpulsefx.model.AIModel>() {
+            @Override
+            protected void updateItem(com.netpulse.netpulsefx.model.AIModel model, boolean empty) {
+                super.updateItem(model, empty);
+                if (empty || model == null) {
+                    setText(null);
+                    setGraphic(null);
+                } else {
+                    // 显示带类别标签的模型名称
+                    setText(model.getDisplayName());
+                    // 添加工具提示显示模型描述
+                    setTooltip(new javafx.scene.control.Tooltip(model.getDescription()));
+                }
+            }
+        });
+        
+        // 设置按钮单元格（显示选中项）
+        modelComboBox.setButtonCell(new javafx.scene.control.ListCell<com.netpulse.netpulsefx.model.AIModel>() {
+            @Override
+            protected void updateItem(com.netpulse.netpulsefx.model.AIModel model, boolean empty) {
+                super.updateItem(model, empty);
+                if (empty || model == null) {
+                    setText(null);
+                } else {
+                    setText(model.getDisplayName());
+                }
+            }
+        });
         // 设置下拉框样式
         modelComboBox.setStyle(
             "-fx-pref-width: 400px; " +
@@ -1125,7 +1162,15 @@ public class MainController {
         ));
         
         // 获取当前配置
-        String currentModel = aiService != null ? aiService.getConfig().getModel() : "gpt-4o";
+        // 尝试从当前配置中查找对应的模型枚举
+        com.netpulse.netpulsefx.model.AIModel currentModelEnum = null;
+        if (aiService != null && aiService.getConfig() != null && aiService.getConfig().getModel() != null) {
+            currentModelEnum = com.netpulse.netpulsefx.model.AIModel.findByModelId(aiService.getConfig().getModel());
+        }
+        // 如果未找到，默认使用 DeepSeek Chat
+        if (currentModelEnum == null) {
+            currentModelEnum = com.netpulse.netpulsefx.model.AIModel.DEEPSEEK_CHAT;
+        }
         String currentEndpoint = aiService != null ? aiService.getConfig().getApiEndpoint() : "";
         String currentKey = aiService != null ? aiService.getConfig().getApiKey() : "";
         
@@ -1172,7 +1217,8 @@ public class MainController {
         
         // 如果当前没有配置或接口地址为空，根据模型设置默认地址
         if (currentEndpoint == null || currentEndpoint.isEmpty()) {
-            String defaultEndpoint = getDefaultEndpointForModel(currentModel);
+            // 使用模型枚举的默认端点
+            String defaultEndpoint = currentModelEnum.getDefaultEndpoint();
             if (defaultEndpoint != null && !defaultEndpoint.isEmpty()) {
                 apiEndpointField.setText(defaultEndpoint);
             }
@@ -1227,19 +1273,18 @@ public class MainController {
         statusLabel.setStyle("-fx-text-fill: #666; -fx-font-size: 12px;");
         
         // 设置当前模型值（必须在创建输入框之后）
-        if (currentModel != null && modelComboBox.getItems().contains(currentModel)) {
-            modelComboBox.setValue(currentModel);
-        }
+        modelComboBox.setValue(currentModelEnum);
         
         // 当模型选择改变时，自动更新默认接口地址
         modelComboBox.valueProperty().addListener((observable, oldValue, newValue) -> {
-            if (newValue != null && !newValue.equals("custom")) {
-                String defaultEndpoint = getDefaultEndpointForModel(newValue);
+            if (newValue != null && newValue != com.netpulse.netpulsefx.model.AIModel.CUSTOM) {
+                String defaultEndpoint = newValue.getDefaultEndpoint();
                 if (defaultEndpoint != null && !defaultEndpoint.isEmpty()) {
                     // 只有当用户没有手动修改过接口地址，或者地址为空时才自动更新
                     String currentText = apiEndpointField.getText();
+                    String oldDefaultEndpoint = oldValue != null ? oldValue.getDefaultEndpoint() : "";
                     if (currentText == null || currentText.isEmpty() || 
-                        currentText.equals(getDefaultEndpointForModel(oldValue))) {
+                        currentText.equals(oldDefaultEndpoint)) {
                         apiEndpointField.setText(defaultEndpoint);
                     }
                 }
@@ -1322,15 +1367,48 @@ public class MainController {
         // 保存且测试按钮事件
         javafx.scene.control.Button saveAndTestButton = (javafx.scene.control.Button) dialog.getDialogPane().lookupButton(saveAndTestButtonType);
         saveAndTestButton.setOnAction(e -> {
-            String selectedModel = modelComboBox.getValue();
+            com.netpulse.netpulsefx.model.AIModel selectedModelEnum = modelComboBox.getValue();
             String endpoint = apiEndpointField.getText().trim();
             String key = apiKeyField.getText();
             
-            if (selectedModel == null || selectedModel.isEmpty()) {
+            if (selectedModelEnum == null) {
                 statusLabel.setText("错误：请选择模型名称");
                 statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
                 e.consume();
                 return;
+            }
+            
+            // 获取实际的模型 ID 和提供商
+            String actualModel = selectedModelEnum.getModelId();
+            String provider = selectedModelEnum.getProvider();
+            
+            // 如果是自定义模型，需要用户手动输入端点
+            if (selectedModelEnum == com.netpulse.netpulsefx.model.AIModel.CUSTOM) {
+                if (endpoint.isEmpty()) {
+                    statusLabel.setText("错误：自定义模型需要输入 API 接口地址");
+                    statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
+                    showAlert(Alert.AlertType.WARNING, "保存并测试", "自定义模型需要输入 API 接口地址");
+                    e.consume();
+                    return;
+                }
+                // 自定义模型需要根据端点判断提供商
+                if (endpoint.contains("openai.com")) {
+                    provider = "openai";
+                } else if (endpoint.contains("generativelanguage.googleapis.com") || endpoint.contains("gemini")) {
+                    provider = "gemini";
+                } else if (endpoint.contains("localhost") || endpoint.contains("ollama")) {
+                    provider = "ollama";
+                } else if (endpoint.contains("deepseek.com")) {
+                    provider = "deepseek";
+                } else {
+                    provider = "custom";
+                }
+            } else {
+                // 使用模型枚举的默认端点（如果用户未修改）
+                if (endpoint.isEmpty() && selectedModelEnum.getDefaultEndpoint() != null) {
+                    endpoint = selectedModelEnum.getDefaultEndpoint();
+                    apiEndpointField.setText(endpoint);
+                }
             }
             
             if (endpoint.isEmpty()) {
@@ -1338,18 +1416,6 @@ public class MainController {
                 statusLabel.setStyle("-fx-text-fill: #dc3545; -fx-font-size: 12px;");
                 e.consume();
                 return;
-            }
-            
-            // 检查 API Key（Ollama 可能不需要，但其他提供商需要）
-            String provider = "deepseek";
-            if (endpoint.contains("openai.com")) {
-                provider = "openai";
-            } else if (endpoint.contains("generativelanguage.googleapis.com") || endpoint.contains("gemini")) {
-                provider = "gemini";
-            } else if (endpoint.contains("localhost") || endpoint.contains("ollama")) {
-                provider = "ollama";
-            } else if (endpoint.contains("deepseek.com")) {
-                provider = "deepseek";
             }
             
             // 对于需要 API Key 的提供商，检查是否为空
@@ -1368,8 +1434,8 @@ public class MainController {
                 return;
             }
             
-            // 创建新配置
-            AIConfig newConfig = new AIConfig(provider, endpoint, key, selectedModel);
+            // 创建新配置（使用实际模型名称）
+            AIConfig newConfig = new AIConfig(provider, endpoint, key, actualModel);
             aiService = new AIService(newConfig);
             aiProviderName = formatProviderName(provider);
             
@@ -1387,7 +1453,7 @@ public class MainController {
             statusLabel.setStyle("-fx-text-fill: #007bff; -fx-font-size: 12px;");
             
             // 执行测试连接
-            testAIConnection(selectedModel, endpoint, key, statusLabel, dialog, true);
+            testAIConnection(actualModel, endpoint, key, statusLabel, dialog, true);
         });
         
         // 设置结果转换器（不再需要，因为按钮事件已经处理了所有逻辑）
@@ -1401,25 +1467,34 @@ public class MainController {
     }
     
     /**
-     * 根据模型名称获取默认的 API 接口地址
+     * 根据模型名称获取默认的 API 接口地址（兼容旧代码）
      * 
-     * @param modelName 模型名称
-     * @return 默认的 API 接口地址
+     * @param modelName 模型名称（可以是模型 ID 或显示名称）
+     * @return 默认的 API 接口地址，如果未找到则返回空字符串
      */
     private String getDefaultEndpointForModel(String modelName) {
         if (modelName == null || modelName.isEmpty()) {
             return "";
         }
         
-        // 根据模型名称返回对应的默认接口地址
+        // 尝试通过模型 ID 查找
+        com.netpulse.netpulsefx.model.AIModel model = com.netpulse.netpulsefx.model.AIModel.findByModelId(modelName);
+        if (model != null) {
+            return model.getDefaultEndpoint();
+        }
+        
+        // 尝试通过显示名称查找
+        model = com.netpulse.netpulsefx.model.AIModel.findByDisplayName(modelName);
+        if (model != null) {
+            return model.getDefaultEndpoint();
+        }
+        
+        // 兼容旧代码：直接字符串匹配（向后兼容）
         return switch (modelName.toLowerCase()) {
             case "deepseek-chat" -> "https://api.deepseek.com/v1/chat/completions";
-            case "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo" -> "https://api.openai.com/v1/chat/completions";
+            case "gpt-4o" -> "https://api.openai.com/v1/chat/completions";
             case "gemini-2.5-flash" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-            case "gemini-1.5-flash" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
-            case "gemini-1.5-pro" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent";
-            case "gemini-pro" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
-            case "llama2", "llama3" -> "http://localhost:11434/api/generate";
+            case "gemini-2.5-pro" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent";
             default -> "";
         };
     }
@@ -1519,6 +1594,16 @@ public class MainController {
                             }""",
                             model
                         );
+                    } else if (config.getProvider().equals("gemini")) {
+                        // Gemini API 格式：{"contents": [{"parts": [{"text": "..."}]}]}
+                        requestBody = """
+                            {
+                              "contents": [{
+                                "parts": [{
+                                  "text": "test"
+                                }]
+                              }]
+                            }""";
                     } else {
                         // DeepSeek/OpenAI 格式
                         requestBody = String.format(
@@ -1543,9 +1628,14 @@ public class MainController {
                     // 添加 API Key（如果不是 Ollama）
                     if (!config.getProvider().equals("ollama") && 
                         config.getApiKey() != null && !config.getApiKey().trim().isEmpty()) {
-                        // DeepSeek 和 OpenAI 都使用 Bearer token
-                        String authHeader = "Bearer " + config.getApiKey();
-                        requestBuilder.header("Authorization", authHeader);
+                        if (config.getProvider().equals("gemini")) {
+                            // Gemini 使用 x-goog-api-key 请求头
+                            requestBuilder.header("x-goog-api-key", config.getApiKey());
+                        } else {
+                            // DeepSeek 和 OpenAI 都使用 Bearer token
+                            String authHeader = "Bearer " + config.getApiKey();
+                            requestBuilder.header("Authorization", authHeader);
+                        }
                     }
                     
                     java.net.http.HttpRequest request = requestBuilder
@@ -1579,11 +1669,14 @@ public class MainController {
                             return false; // 响应包含错误信息
                         }
                         
-                        // 检查是否包含有效的响应结构（choices 或 response 字段）
+                        // 检查是否包含有效的响应结构（choices、response 或 candidates 字段）
                         boolean hasValidStructure = false;
                         if (config.getProvider().equals("ollama")) {
                             // Ollama 响应应包含 "response" 字段
                             hasValidStructure = responseBody.contains("\"response\"");
+                        } else if (config.getProvider().equals("gemini")) {
+                            // Gemini 响应应包含 "candidates" 字段
+                            hasValidStructure = responseBody.contains("\"candidates\"");
                         } else {
                             // DeepSeek/OpenAI 响应应包含 "choices" 字段
                             hasValidStructure = responseBody.contains("\"choices\"");
