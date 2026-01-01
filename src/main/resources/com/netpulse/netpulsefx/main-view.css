@@ -1,355 +1,610 @@
-/* NetPulse FX 主界面样式表 */
+/* NetPulse FX 主界面样式表 - 现代精致化主题 */
+
+/* ========== 全局字体与配色 ========== */
+.root {
+    /* 现代非衬线字体 */
+    -fx-font-family: "Segoe UI", "Microsoft YaHei UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+    -fx-font-size: 13px;
+    
+    /* 统一配色方案 - 深蓝主题 */
+    -fx-primary-color: #2C3E50;
+    -fx-primary-hover: #34495E;
+    -fx-primary-light: #3498DB;
+    -fx-primary-dark: #1A252F;
+    
+    /* 辅助色 */
+    -fx-accent-color: #E74C3C;
+    -fx-accent-hover: #C0392B;
+    -fx-success-color: #27AE60;
+    -fx-warning-color: #F39C12;
+    -fx-info-color: #3498DB;
+    
+    /* 中性色 */
+    -fx-bg-color: #FFFFFF;
+    -fx-bg-secondary: #F8F9FA;
+    -fx-border-color: #E1E8ED;
+    -fx-text-primary: #2C3E50;
+    -fx-text-secondary: #7F8C8D;
+}
+
+/* ========== 控制区域容器 ========== */
+.control-panel {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 12px;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 12px;
+    -fx-border-width: 1px;
+    -fx-padding: 20px;
+    -fx-effect: dropshadow(three-pass-box, rgba(44,62,80,0.08), 10, 0, 0, 2);
+}
+
+/* ========== 数据统计卡片美化 ========== */
+.stats-card {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 16px;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 16px;
+    -fx-border-width: 1px;
+    -fx-padding: 24px;
+    /* 浮动阴影效果 */
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.12), 12, 0, 0, 4);
+    -fx-min-width: 200px;
+    -fx-min-height: 110px;
+    -fx-cursor: hand;
+    -fx-transition: all 0.3s ease;
+}
+
+.stats-card:hover {
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.25), 16, 0, 0, 6);
+    -fx-border-color: #3498DB;
+    -fx-translate-y: -2px;
+}
+
+/* 卡片图标样式 */
+.stats-card-icon {
+    -fx-font-size: 32px;
+    -fx-text-fill: #3498DB;
+    -fx-padding: 0 12px 0 0;
+}
+
+/* 下行速度卡片 - 蓝色渐变 */
+.stats-card.download {
+    -fx-background-color: linear-gradient(to bottom right, #EBF5FB, #FFFFFF);
+}
+
+.stats-card.download .stats-card-icon {
+    -fx-text-fill: #3498DB;
+}
+
+/* 上行速度卡片 - 绿色渐变 */
+.stats-card.upload {
+    -fx-background-color: linear-gradient(to bottom right, #EAFAF1, #FFFFFF);
+}
+
+.stats-card.upload .stats-card-icon {
+    -fx-text-fill: #27AE60;
+}
+
+/* 峰值速度卡片 - 橙色渐变 */
+.stats-card.peak {
+    -fx-background-color: linear-gradient(to bottom right, #FEF5E7, #FFFFFF);
+}
+
+.stats-card.peak .stats-card-icon {
+    -fx-text-fill: #F39C12;
+}
+
+/* 总流量卡片 - 紫色渐变 */
+.stats-card.total {
+    -fx-background-color: linear-gradient(to bottom right, #F4F3FF, #FFFFFF);
+}
+
+.stats-card.total .stats-card-icon {
+    -fx-text-fill: #9B59B6;
+}
+
+.stats-card-title {
+    -fx-font-size: 13px;
+    -fx-text-fill: #7F8C8D;
+    -fx-font-weight: 500;
+    -fx-letter-spacing: 0.5px;
+}
+
+.stats-card-value {
+    -fx-font-size: 32px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #2C3E50;
+    -fx-letter-spacing: -0.5px;
+}
+
+.stats-card-unit {
+    -fx-font-size: 13px;
+    -fx-text-fill: #95A5A6;
+    -fx-font-weight: 400;
+    -fx-padding: 0 0 0 4px;
+}
+
+/* ========== 图表高级渲染 ========== */
+.area-chart {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 12px;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 12px;
+    -fx-border-width: 1px;
+    -fx-padding: 20px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.08), 10, 0, 0, 2);
+}
+
+/* 隐藏纵向网格线，只保留横向虚线 */
+.area-chart .chart-vertical-grid-lines {
+    -fx-stroke: transparent;
+}
+
+.area-chart .chart-horizontal-grid-lines {
+    -fx-stroke: #E1E8ED;
+    -fx-stroke-dash-array: 4 4;
+    -fx-stroke-width: 1px;
+}
+
+.area-chart .chart-alternative-column-fill,
+.area-chart .chart-alternative-row-fill {
+    -fx-fill: transparent;
+}
+
+/* 折线下渐变填充（模拟 AreaChart） */
+.area-chart .chart-series-area-fill {
+    -fx-fill: linear-gradient(to bottom, 
+        rgba(52,152,219,0.35) 0%,
+        rgba(52,152,219,0.20) 50%,
+        rgba(52,152,219,0.05) 100%);
+}
+
+.area-chart .chart-series-line {
+    -fx-stroke-width: 3px;
+    -fx-stroke: #3498DB;
+    -fx-stroke-line-cap: round;
+    -fx-stroke-line-join: round;
+}
+
+.area-chart .chart-line-symbol {
+    -fx-background-color: #3498DB;
+    -fx-background-radius: 5px;
+    -fx-padding: 5px;
+    -fx-min-width: 10px;
+    -fx-min-height: 10px;
+    -fx-pref-width: 10px;
+    -fx-pref-height: 10px;
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.6), 6, 0, 0, 2);
+    -fx-cursor: hand;
+    -fx-transition: all 0.2s ease;
+}
+
+.area-chart .chart-line-symbol:hover {
+    -fx-background-color: #F1C40F;
+    -fx-scale-x: 1.4;
+    -fx-scale-y: 1.4;
+    -fx-effect: dropshadow(gaussian, rgba(241,196,15,0.8), 10, 0, 0, 3);
+}
+
+/* 下行速度序列样式 */
+.area-chart .chart-series-line.series0 {
+    -fx-stroke: #3498DB;
+}
+
+.area-chart .chart-line-symbol.series0 {
+    -fx-background-color: #3498DB;
+}
+
+.area-chart .chart-line-symbol.series0:hover {
+    -fx-background-color: #F1C40F;
+}
+
+/* 上行速度序列样式 */
+.area-chart .chart-series-line.series1 {
+    -fx-stroke: #27AE60;
+}
+
+.area-chart .chart-line-symbol.series1 {
+    -fx-background-color: #27AE60;
+}
+
+.area-chart .chart-line-symbol.series1:hover {
+    -fx-background-color: #F1C40F;
+}
+
+/* 总流量序列样式 */
+.area-chart .chart-series-line.series2 {
+    -fx-stroke: #9B59B6;
+}
+
+.area-chart .chart-line-symbol.series2 {
+    -fx-background-color: #9B59B6;
+}
+
+.area-chart .chart-line-symbol.series2:hover {
+    -fx-background-color: #F1C40F;
+}
+
+.area-chart .chart-plot-background {
+    -fx-background-color: #FFFFFF;
+}
+
+.area-chart .axis {
+    -fx-tick-label-fill: #7F8C8D;
+    -fx-font-size: 11px;
+    -fx-font-weight: 500;
+}
+
+.area-chart .axis-label {
+    -fx-text-fill: #2C3E50;
+    -fx-font-size: 13px;
+    -fx-font-weight: 600;
+}
+
+.area-chart .axis-tick-mark {
+    -fx-stroke: #BDC3C7;
+}
+
+/* ========== 进程列表动态色彩 ========== */
+.table-view {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-border-width: 1px;
+}
+
+.table-view .column-header {
+    -fx-background-color: #F8F9FA;
+    -fx-border-color: #E1E8ED;
+    -fx-border-width: 0 0 1px 0;
+    -fx-padding: 12px;
+    -fx-font-weight: 600;
+    -fx-text-fill: #2C3E50;
+    -fx-font-size: 12px;
+}
+
+.table-view .column-header .label {
+    -fx-text-fill: #2C3E50;
+    -fx-font-weight: 600;
+}
+
+/* 数值列右对齐 */
+.table-view .table-column {
+    -fx-alignment: CENTER-RIGHT;
+}
+
+.table-view .table-column:first {
+    -fx-alignment: CENTER-LEFT;
+}
+
+.table-view .table-row-cell {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: transparent;
+    -fx-padding: 8px 0;
+}
+
+.table-view .table-row-cell:hover {
+    -fx-background-color: #F8F9FA;
+}
+
+.table-view .table-row-cell:selected {
+    -fx-background-color: #EBF5FB;
+}
+
+.table-view .table-cell {
+    -fx-border-color: transparent;
+    -fx-padding: 8px 12px;
+    -fx-text-fill: #2C3E50;
+    -fx-font-size: 12px;
+}
+
+/* 进度条颜色 - 绿色（低流量） */
+.progress-bar-cell.low-traffic .progress-bar {
+    -fx-background-color: linear-gradient(to right, #27AE60, #2ECC71);
+}
+
+/* 进度条颜色 - 黄色（中等流量） */
+.progress-bar-cell.medium-traffic .progress-bar {
+    -fx-background-color: linear-gradient(to right, #F39C12, #F1C40F);
+}
+
+/* 进度条颜色 - 红色（高流量） */
+.progress-bar-cell.high-traffic .progress-bar {
+    -fx-background-color: linear-gradient(to right, #E74C3C, #EC7063);
+}
 
 /* ========== ComboBox 样式 ========== */
 .combo-box {
-    -fx-background-color: #ffffff;
-    -fx-border-color: #d0d0d0;
-    -fx-border-radius: 6px;
-    -fx-background-radius: 6px;
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
     -fx-border-width: 1px;
-    -fx-padding: 4px 8px;
-    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.1), 2, 0, 0, 1);
+    -fx-padding: 8px 12px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.05), 4, 0, 0, 1);
+    -fx-font-size: 13px;
 }
 
 .combo-box:hover {
-    -fx-border-color: #4a90e2;
-    -fx-effect: dropshadow(three-pass-box, rgba(74,144,226,0.2), 4, 0, 0, 2);
+    -fx-border-color: #3498DB;
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.15), 6, 0, 0, 2);
 }
 
 .combo-box:focused {
-    -fx-border-color: #4a90e2;
+    -fx-border-color: #3498DB;
     -fx-border-width: 2px;
 }
 
 .combo-box:disabled {
-    -fx-background-color: #f5f5f5;
-    -fx-border-color: #e0e0e0;
+    -fx-background-color: #F8F9FA;
+    -fx-border-color: #E1E8ED;
     -fx-opacity: 0.6;
 }
 
-/* ComboBox 下拉箭头按钮 */
 .combo-box .arrow-button {
     -fx-background-color: transparent;
     -fx-padding: 0 8px 0 0;
 }
 
 .combo-box .arrow-button .arrow {
-    -fx-background-color: #666666;
+    -fx-background-color: #7F8C8D;
     -fx-shape: "M 0 0 L 4 4 L 8 0 Z";
     -fx-padding: 4px;
 }
 
 .combo-box:hover .arrow-button .arrow {
-    -fx-background-color: #4a90e2;
+    -fx-background-color: #3498DB;
 }
 
-/* ComboBox 文本输入区域 */
-.combo-box .text-input {
-    -fx-background-color: transparent;
-    -fx-border-color: transparent;
-}
-
-/* ComboBox 下拉列表样式 */
 .combo-box-popup .list-view {
-    -fx-background-color: #ffffff;
-    -fx-border-color: #d0d0d0;
-    -fx-border-radius: 6px;
-    -fx-background-radius: 6px;
-    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.15), 8, 0, 0, 2);
-    /* 注意：JavaFX CSS 不支持 max-height，需要在代码中通过 setVisibleRowCount 控制 */
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.15), 12, 0, 0, 4);
 }
 
 .combo-box-popup .list-view .list-cell {
-    -fx-background-color: #ffffff;
-    -fx-padding: 8px 12px;
+    -fx-background-color: #FFFFFF;
+    -fx-padding: 10px 16px;
     -fx-border-color: transparent;
 }
 
 .combo-box-popup .list-view .list-cell:hover {
-    -fx-background-color: #e8f4f8;
+    -fx-background-color: #EBF5FB;
 }
 
 .combo-box-popup .list-view .list-cell:selected {
-    -fx-background-color: #4a90e2;
+    -fx-background-color: #3498DB;
 }
 
 .combo-box-popup .list-view .list-cell:selected .text {
-    -fx-fill: #ffffff;
-}
-
-/* ComboBox 选中项显示区域（ButtonCell） */
-.combo-box .list-cell {
-    -fx-background-color: transparent;
-    -fx-padding: 4px 8px;
-}
-
-/* 网卡信息单元格样式 */
-.network-interface-cell {
-    -fx-spacing: 8px;
-    -fx-padding: 4px;
-}
-
-.network-interface-name {
-    -fx-font-size: 13px;
-    -fx-font-weight: bold;
-    -fx-text-fill: #2c3e50;
-}
-
-.network-interface-details {
-    -fx-font-size: 11px;
-    -fx-text-fill: #6c757d;
-    -fx-spacing: 4px;
-}
-
-.network-interface-ip {
-    -fx-text-fill: #4a90e2;
-}
-
-.network-interface-mac {
-    -fx-text-fill: #6c757d;
+    -fx-fill: #FFFFFF;
 }
 
 /* ========== 按钮样式 ========== */
 .button {
-    -fx-padding: 6px 16px;
-    -fx-background-radius: 6px;
-    -fx-border-radius: 6px;
+    -fx-padding: 10px 20px;
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
     -fx-font-size: 13px;
-    -fx-font-weight: 500;
+    -fx-font-weight: 600;
     -fx-cursor: hand;
-    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.1), 2, 0, 0, 1);
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.1), 4, 0, 0, 2);
+    -fx-transition: all 0.2s ease;
 }
 
 .button:hover {
-    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 4, 0, 0, 2);
-    -fx-scale-x: 1.02;
-    -fx-scale-y: 1.02;
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.25), 8, 0, 0, 4);
+    -fx-translate-y: -1px;
 }
 
 .button:pressed {
-    -fx-scale-x: 0.98;
-    -fx-scale-y: 0.98;
+    -fx-translate-y: 0px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.1), 2, 0, 0, 1);
+}
+
+/* 主要按钮 */
+#startMonitorButton, #viewHistoryButton {
+    -fx-background-color: #3498DB;
+    -fx-text-fill: #FFFFFF;
+}
+
+#startMonitorButton:hover, #viewHistoryButton:hover {
+    -fx-background-color: #2980B9;
+}
+
+#startMonitorButton:disabled {
+    -fx-background-color: #BDC3C7;
+    -fx-text-fill: #7F8C8D;
+}
+
+/* 停止按钮 */
+#stopMonitorButton {
+    -fx-background-color: #E74C3C;
+    -fx-text-fill: #FFFFFF;
+}
+
+#stopMonitorButton:hover {
+    -fx-background-color: #C0392B;
+}
+
+#stopMonitorButton:disabled {
+    -fx-background-color: #F5B7B1;
+    -fx-text-fill: #7F8C8D;
 }
 
 /* 刷新按钮 */
 #refreshNICButton {
-    -fx-background-color: #6c757d;
-    -fx-text-fill: #ffffff;
+    -fx-background-color: #95A5A6;
+    -fx-text-fill: #FFFFFF;
 }
 
 #refreshNICButton:hover {
-    -fx-background-color: #5a6268;
+    -fx-background-color: #7F8C8D;
 }
 
-/* 开始监控按钮 */
-#startMonitorButton {
-    -fx-background-color: #28a745;
-    -fx-text-fill: #ffffff;
-}
-
-#startMonitorButton:hover {
-    -fx-background-color: #218838;
-}
-
-#startMonitorButton:disabled {
-    -fx-background-color: #a0c4a0;
-    -fx-text-fill: #808080;
-}
-
-/* 停止监控按钮 */
-#stopMonitorButton {
-    -fx-background-color: #dc3545;
-    -fx-text-fill: #ffffff;
-}
-
-#stopMonitorButton:hover {
-    -fx-background-color: #c82333;
-}
-
-#stopMonitorButton:disabled {
-    -fx-background-color: #d4a5a5;
-    -fx-text-fill: #808080;
-}
-
-/* 查看历史数据按钮 - 青色主题 */
-#viewHistoryButton {
-    -fx-background-color: #17a2b8;
-    -fx-text-fill: #ffffff;
-}
-
-#viewHistoryButton:hover {
-    -fx-background-color: #138496;
-    -fx-scale-x: 1.05;
-    -fx-scale-y: 1.05;
-}
-
-/* 开始监控按钮 - 橙色主题 */
-#startMonitorButton {
-    -fx-background-color: #ff9800;
-    -fx-text-fill: #ffffff;
-}
-
-#startMonitorButton:hover {
-    -fx-background-color: #f57c00;
-    -fx-scale-x: 1.05;
-    -fx-scale-y: 1.05;
-}
-
-#startMonitorButton:disabled {
-    -fx-background-color: #ffcc99;
-    -fx-text-fill: #808080;
-}
-
-/* 停止监控按钮 - 深橙色/红色主题 */
-#stopMonitorButton {
-    -fx-background-color: #ff5722;
-    -fx-text-fill: #ffffff;
-}
-
-#stopMonitorButton:hover {
-    -fx-background-color: #e64a19;
-    -fx-scale-x: 1.05;
-    -fx-scale-y: 1.05;
-}
-
-#stopMonitorButton:disabled {
-    -fx-background-color: #ffb3a0;
-    -fx-text-fill: #808080;
-}
-
-/* ========== 概览看板样式 ========== */
-.overview-card {
-    -fx-background-color: #ffffff;
-    -fx-background-radius: 8px;
-    -fx-border-color: #e0e0e0;
+/* ========== BPF 过滤表达式输入框样式 ========== */
+.bpf-filter-input {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
     -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
     -fx-border-width: 1px;
-    -fx-padding: 15px;
-    -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.08), 4, 0, 0, 2);
-    -fx-min-height: 80px;
+    -fx-padding: 10px 14px;
+    -fx-font-size: 13px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.05), 4, 0, 0, 1);
 }
 
-.overview-card:hover {
-    -fx-effect: dropshadow(three-pass-box, rgba(255,152,0,0.2), 6, 0, 0, 3);
-    -fx-border-color: #ff9800;
+.bpf-filter-input:hover {
+    -fx-border-color: #3498DB;
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.15), 6, 0, 0, 2);
 }
 
-.overview-card-title {
-    -fx-font-size: 12px;
-    -fx-text-fill: #6c757d;
-    -fx-font-weight: normal;
+.bpf-filter-input:focused {
+    -fx-border-color: #3498DB;
+    -fx-border-width: 2px;
 }
 
-.overview-card-value {
-    -fx-font-size: 24px;
-    -fx-font-weight: bold;
-    -fx-text-fill: #ff9800;
+.bpf-filter-input.error {
+    -fx-border-color: #E74C3C;
+    -fx-border-width: 2px;
+    -fx-effect: dropshadow(gaussian, rgba(231,76,60,0.25), 8, 0, 0, 3);
 }
 
-.overview-card-unit {
-    -fx-font-size: 12px;
-    -fx-text-fill: #6c757d;
-    -fx-font-weight: normal;
+/* ========== MenuButton 样式 ========== */
+.menu-button {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-border-width: 1px;
+    -fx-padding: 10px 16px;
+    -fx-font-size: 13px;
+    -fx-font-weight: 600;
+    -fx-text-fill: #2C3E50;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.05), 4, 0, 0, 1);
+    -fx-cursor: hand;
 }
 
-/* ========== 折线图面积图样式 ========== */
-.area-chart {
-    -fx-background-color: #fafafa;
-    -fx-padding: 10px;
+.menu-button:hover {
+    -fx-border-color: #3498DB;
+    -fx-background-color: #EBF5FB;
+    -fx-text-fill: #3498DB;
+    -fx-effect: dropshadow(gaussian, rgba(52,152,219,0.15), 6, 0, 0, 2);
 }
 
-/* 隐藏网格线 */
-.area-chart .chart-horizontal-grid-lines,
-.area-chart .chart-vertical-grid-lines {
-    -fx-stroke: transparent;
-}
-
-/* 显示主要网格线（更稀疏） */
-.area-chart .chart-alternative-column-fill,
-.area-chart .chart-alternative-row-fill {
-    -fx-fill: transparent;
-}
-
-/* 面积图效果：为折线下方添加渐变背景 */
-.area-chart .chart-series-line {
-    -fx-stroke-width: 2px;
-    -fx-stroke: #ff9800;
-}
-
-.area-chart .chart-line-symbol {
-    -fx-background-color: #ff9800;
-    -fx-background-radius: 3px;
-    -fx-padding: 3px;
-}
-
-/* 图表区域背景 */
-.area-chart .chart-plot-background {
-    -fx-background-color: #ffffff;
-}
-
-/* 坐标轴样式 */
-.area-chart .axis {
-    -fx-tick-label-fill: #666666;
-    -fx-font-size: 11px;
-}
-
-.area-chart .axis-label {
-    -fx-text-fill: #333333;
-    -fx-font-size: 12px;
+.menu-button:disabled {
+    -fx-background-color: #F8F9FA;
+    -fx-border-color: #E1E8ED;
+    -fx-text-fill: #95A5A6;
+    -fx-opacity: 0.6;
+    -fx-cursor: default;
 }
 
 /* ========== 状态栏样式 ========== */
 .status-bar {
-    -fx-background-color: #f5f5f5;
-    -fx-border-color: #e0e0e0;
+    -fx-background-color: #F8F9FA;
+    -fx-border-color: #E1E8ED;
     -fx-border-width: 1px 0 0 0;
-    -fx-min-height: 25px;
-    -fx-max-height: 25px;
+    -fx-min-height: 35px;
 }
 
 .status-label {
-    -fx-font-size: 11px;
-    -fx-text-fill: #6c757d;
-    -fx-font-weight: normal;
-}
-
-.status-value {
-    -fx-font-size: 11px;
-    -fx-text-fill: #333333;
+    -fx-font-size: 12px;
+    -fx-text-fill: #7F8C8D;
     -fx-font-weight: 500;
 }
 
+.status-value {
+    -fx-font-size: 12px;
+    -fx-text-fill: #2C3E50;
+    -fx-font-weight: 600;
+}
+
 .status-separator {
-    -fx-font-size: 11px;
-    -fx-text-fill: #d0d0d0;
+    -fx-font-size: 12px;
+    -fx-text-fill: #BDC3C7;
 }
 
 .status-ai {
-    -fx-text-fill: #17a2b8;
+    -fx-text-fill: #3498DB;
 }
 
 .status-db {
-    -fx-text-fill: #28a745;
+    -fx-text-fill: #27AE60;
 }
 
-/* ========== 进程表格进度条样式 ========== */
-/* 进度条背景（在 Cell Factory 中实现） */
-.progress-cell {
-    -fx-background-color: #f0f0f0;
-    -fx-background-radius: 3px;
+/* ========== TitledPane 样式 ========== */
+.titled-pane {
+    -fx-background-color: #FFFFFF;
+    -fx-border-color: #E1E8ED;
+    -fx-border-radius: 8px;
+    -fx-background-radius: 8px;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(44,62,80,0.05), 6, 0, 0, 2);
 }
 
-.progress-bar-fill {
-    -fx-background-color: linear-gradient(to right, #ff9800, #ffb74d);
-    -fx-background-radius: 3px;
+.titled-pane > .title {
+    -fx-background-color: #F8F9FA;
+    -fx-background-radius: 8px 8px 0 0;
+    -fx-padding: 12px 16px;
+    -fx-font-size: 14px;
+    -fx-font-family: "Microsoft YaHei", "微软雅黑", "SimHei", sans-serif;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2C3E50;
 }
 
-/* ========== 警告样式 ========== */
-.combo-box:error {
-    -fx-border-color: #dc3545;
-    -fx-border-width: 2px;
-    -fx-effect: dropshadow(three-pass-box, rgba(220,53,69,0.3), 6, 0, 0, 2);
+.titled-pane > .title > .text {
+    -fx-font-family: "Microsoft YaHei", "微软雅黑", "SimHei", sans-serif;
+    -fx-font-weight: bold;
 }
 
-/* 震动动画（通过 CSS 无法实现，需要在 Java 代码中实现） */
+.titled-pane > .content {
+    -fx-background-color: #FFFFFF;
+    -fx-background-radius: 0 0 8px 8px;
+    -fx-padding: 12px;
+}
 
+/* ========== 滚动条样式 ========== */
+.scroll-bar {
+    -fx-background-color: #F8F9FA;
+}
+
+.scroll-bar .track {
+    -fx-background-color: #F8F9FA;
+    -fx-background-radius: 6px;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: #BDC3C7;
+    -fx-background-radius: 6px;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: #3498DB;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+/* ========== 全局标题样式 ========== */
+.title-label {
+    -fx-font-size: 20px;
+    -fx-font-family: "Microsoft YaHei", "微软雅黑", "SimHei", sans-serif;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2C3E50;
+    -fx-letter-spacing: -0.5px;
+}
+
+.section-label {
+    -fx-font-size: 16px;
+    -fx-font-family: "Microsoft YaHei", "微软雅黑", "SimHei", sans-serif;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2C3E50;
+    -fx-padding: 0 0 8px 0;
+}

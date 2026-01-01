@@ -64,34 +64,40 @@ analysisFuture.thenAccept(result -> {
 });
 ```
 
-### 在 MainController 中的实际使用
+### 在 HistoryController 中的实际使用
 
-参考 `MainController.onAIAnalyzeButtonClick()` 方法：
+AI 分析功能主要在历史数据查看窗口中使用，参考 `HistoryController` 中的实现：
 
 ```java
-@FXML
-protected void onAIAnalyzeButtonClick() {
-    // 1. 从数据库获取历史数据
-    List<DatabaseService.TrafficRecord> records = 
-        databaseService.queryAllTrafficHistoryAsync().get();
-    
-    // 2. 转换为 TrafficData 对象
-    List<TrafficData> trafficDataList = convertToTrafficData(records);
-    
-    // 3. 调用 AI 服务分析
-    aiService.analyzeTraffic(trafficDataList)
-        .thenAccept(result -> {
-            Platform.runLater(() -> {
-                aiReportTextArea.setText(result);
-            });
-        })
-        .exceptionally(throwable -> {
-            Platform.runLater(() -> {
-                aiReportTextArea.setText("错误: " + throwable.getMessage());
-            });
-            return null;
+// 1. 从数据库获取历史数据
+List<DatabaseService.TrafficRecord> records = 
+    databaseService.queryAllTrafficHistoryAsync().get();
+
+// 2. 转换为 TrafficData 对象
+List<TrafficData> trafficDataList = convertToTrafficData(records);
+
+// 3. 调用 AI 服务分析
+aiService.analyzeTraffic(trafficDataList)
+    .thenAccept(result -> {
+        Platform.runLater(() -> {
+            // 在 WebView 中显示分析结果
+            webEngine.loadContent(
+                MarkdownToHtmlConverter.convertToHtml(result),
+                "text/html"
+            );
         });
-}
+    })
+    .exceptionally(throwable -> {
+        Platform.runLater(() -> {
+            // 显示错误信息
+            webEngine.loadContent(
+                "<html><body><p style='color: red;'>错误: " + 
+                throwable.getMessage() + "</p></body></html>",
+                "text/html"
+            );
+        });
+        return null;
+    });
 ```
 
 ## 系统提示词
@@ -132,10 +138,10 @@ AI 服务使用的系统提示词：
     "averageUpSpeed": 512.30,
     "maxDownSpeed": 2048.00,
     "maxUpSpeed": 1024.00,
-    "timeRange": {
-      "start": "2024-01-01 12:00:00",
-      "end": "2024-01-01 13:00:00"
-    }
+                "timeRange": {
+                  "end": "2024-01-01 13:00:00",
+                  "start": "2024-01-01 12:00:00"
+                }
   }
 }
 ```
@@ -151,12 +157,11 @@ AI 服务会自动处理以下常见错误：
 
 ## UI 集成
 
-在主界面中，AI 分析功能已集成：
+AI 分析功能主要在历史数据查看窗口中集成：
 
-1. **AI 诊断报告区域**：位于流量图表下方
-2. **AI 分析按钮**：点击后触发分析
-3. **状态标签**：显示分析进度
-4. **报告文本区域**：显示 AI 分析结果
+1. **AI 诊断报告区域**：在历史数据查看窗口中使用 WebView 显示分析结果
+2. **会话分析功能**：可以对选定的监控会话进行深度分析
+3. **Markdown 渲染**：分析结果以 Markdown 格式显示，支持富文本展示
 
 ## 配置说明
 

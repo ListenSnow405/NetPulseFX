@@ -235,6 +235,50 @@ public class NetworkInterfaceService {
     }
     
     /**
+     * 获取指定网络接口的有效 IPv4 地址
+     * 优先返回非回环地址的 IPv4 地址
+     * 
+     * @param nif 网络接口对象
+     * @return IPv4 地址字符串，如果无法获取则返回 null
+     */
+    public String getValidIPv4Address(PcapNetworkInterface nif) {
+        if (nif == null) {
+            return null;
+        }
+        
+        List<PcapAddress> addresses = nif.getAddresses();
+        if (addresses == null || addresses.isEmpty()) {
+            return null;
+        }
+        
+        // 优先返回非回环地址的 IPv4 地址
+        for (PcapAddress addr : addresses) {
+            InetAddress inetAddr = addr.getAddress();
+            if (inetAddr != null) {
+                String ip = inetAddr.getHostAddress();
+                // 排除 IPv6 地址（包含冒号）和回环地址
+                if (ip != null && !ip.contains(":") && !ip.equals("127.0.0.1") && !ip.startsWith("127.")) {
+                    return ip;
+                }
+            }
+        }
+        
+        // 如果没有找到非回环地址，返回第一个 IPv4 地址
+        for (PcapAddress addr : addresses) {
+            InetAddress inetAddr = addr.getAddress();
+            if (inetAddr != null) {
+                String ip = inetAddr.getHostAddress();
+                // 只返回 IPv4 地址（不包含冒号）
+                if (ip != null && !ip.contains(":")) {
+                    return ip;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
      * 网络接口信息数据类
      * 用于存储网卡的详细信息，便于 JavaFX 绑定和显示
      */

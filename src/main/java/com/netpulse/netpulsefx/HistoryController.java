@@ -6,6 +6,7 @@ import com.netpulse.netpulsefx.service.AIService;
 import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.ExportService;
 import com.netpulse.netpulsefx.service.IPLocationService;
+import com.netpulse.netpulsefx.service.TrafficRecordQueryBuilder;
 import com.netpulse.netpulsefx.util.MarkdownToHtmlConverter;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -21,19 +22,32 @@ import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Slider;
 import javafx.scene.layout.GridPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.VBox;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.Region;
+import javafx.geometry.Pos;
+import javafx.geometry.Insets;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
@@ -86,6 +100,10 @@ public class HistoryController {
     @FXML
     private TableColumn<TrafficRecordDisplay, String> processNameColumn;
     
+    /** 协议列 */
+    @FXML
+    private TableColumn<TrafficRecordDisplay, String> protocolColumn;
+    
     /** 捕获时间列 */
     @FXML
     private TableColumn<TrafficRecordDisplay, String> captureTimeColumn;
@@ -110,9 +128,13 @@ public class HistoryController {
     @FXML
     private Button queryIpButton;
     
-    /** IP 归属地信息显示区域 */
+    /** IP 归属地信息显示容器 */
     @FXML
-    private TextArea ipLocationTextArea;
+    private VBox ipLocationContainer;
+    
+    /** IP 归属地信息显示区域（结构化Label容器） */
+    @FXML
+    private VBox ipLocationInfoBox;
     
     /** IP 查询状态标签 */
     @FXML
@@ -222,6 +244,57 @@ public class HistoryController {
     @FXML
     private Label sessionMaxUpLabel;
     
+    // ========== 记录详情 UI 组件 ==========
+    
+    /** 记录详情容器 */
+    @FXML
+    private VBox recordDetailContainer;
+    
+    /** 记录信息网格 */
+    @FXML
+    private GridPane recordInfoGrid;
+    
+    /** 记录速度网格 */
+    @FXML
+    private GridPane recordSpeedGrid;
+    
+    /** 记录详情占位符 */
+    @FXML
+    private Label recordDetailPlaceholder;
+    
+    /** 记录ID标签 */
+    @FXML
+    private Label recordIdLabel;
+    
+    
+    /** 记录捕获时间标签 */
+    @FXML
+    private Label recordCaptureTimeLabel;
+    
+    /** 记录协议类型标签 */
+    @FXML
+    private Label recordProtocolLabel;
+    
+    /** 记录源IP地址标签 */
+    @FXML
+    private Label recordSourceIpLabel;
+    
+    /** 记录目标IP地址标签 */
+    @FXML
+    private Label recordDestIpLabel;
+    
+    /** 记录进程名称标签 */
+    @FXML
+    private Label recordProcessNameLabel;
+    
+    /** 记录下行速度标签 */
+    @FXML
+    private Label recordDownSpeedLabel;
+    
+    /** 记录上行速度标签 */
+    @FXML
+    private Label recordUpSpeedLabel;
+    
     /** 删除会话按钮 */
     @FXML
     private Button deleteSessionButton;
@@ -253,6 +326,32 @@ public class HistoryController {
     /** 导出 PDF 按钮 */
     @FXML
     private Button exportPDFButton;
+    
+    // ========== 过滤器 UI 组件 ==========
+    
+    /** 协议过滤：TCP 复选框 */
+    @FXML
+    private CheckBox protocolTcpCheckBox;
+    
+    /** 协议过滤：UDP 复选框 */
+    @FXML
+    private CheckBox protocolUdpCheckBox;
+    
+    /** 协议过滤：其他 复选框 */
+    @FXML
+    private CheckBox protocolOtherCheckBox;
+    
+    /** 应用过滤：进程名称下拉框 */
+    @FXML
+    private ComboBox<String> processNameComboBox;
+    
+    /** 流量阈值：最小下载速度输入框 */
+    @FXML
+    private TextField minDownSpeedTextField;
+    
+    /** 流量阈值：最小下载速度滑块 */
+    @FXML
+    private Slider minDownSpeedSlider;
     
     /** 当前正在执行的 AI 诊断任务（用于取消功能） */
     private Task<String> currentDiagnosisTask;
@@ -286,6 +385,16 @@ public class HistoryController {
     /** 时间格式化器 */
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     
+    /** 防抖刷新任务的 Future（用于取消之前的任务） */
+    private ScheduledFuture<?> debounceRefreshFuture;
+    
+    /** 防抖刷新任务执行器 */
+    private final ScheduledExecutorService debounceExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "FilterDebounceThread");
+        t.setDaemon(true);
+        return t;
+    });
+    
     // ========== 初始化方法 ==========
     
     /**
@@ -307,11 +416,21 @@ public class HistoryController {
         sourceIpColumn.setCellValueFactory(new PropertyValueFactory<>("sourceIp"));
         destIpColumn.setCellValueFactory(new PropertyValueFactory<>("destIp"));
         processNameColumn.setCellValueFactory(new PropertyValueFactory<>("processName"));
+        if (protocolColumn != null) {
+            protocolColumn.setCellValueFactory(new PropertyValueFactory<>("protocol"));
+        }
         captureTimeColumn.setCellValueFactory(new PropertyValueFactory<>("captureTime"));
         
-        // 设置数字列的格式化显示（保留两位小数）
-        downSpeedColumn.setCellFactory(column -> new DecimalTableCell<>(2));
-        upSpeedColumn.setCellFactory(column -> new DecimalTableCell<>(2));
+        // 设置下行速度列的进度条显示
+        downSpeedColumn.setCellFactory(column -> new SpeedProgressBarTableCell(true));
+        
+        // 设置上行速度列的进度条显示
+        upSpeedColumn.setCellFactory(column -> new SpeedProgressBarTableCell(false));
+        
+        // 设置协议列的彩色标签显示
+        if (protocolColumn != null) {
+            protocolColumn.setCellFactory(column -> new ProtocolLabelTableCell());
+        }
         
         // 配置会话列表表格列的数据绑定
         sessionIdColumn.setCellValueFactory(new PropertyValueFactory<>("sessionId"));
@@ -352,8 +471,10 @@ public class HistoryController {
             cancelAIDiagnosisButton.setManaged(false);
         }
         
-        // 初始化 IP 归属地显示区域
-        ipLocationTextArea.setPromptText("IP 归属地信息将显示在这里...\n\n提示：\n1. 在输入框中输入 IP 地址并点击\"查询\"按钮\n2. 或点击表格中的任意行，系统将尝试从该行数据中提取 IP 地址");
+        // 初始化 IP 归属地显示区域（使用结构化Label）
+        if (ipLocationInfoBox != null) {
+            displayIpLocationPlaceholder();
+        }
         
         // 初始化会话详情显示区域（默认显示占位符）
         if (sessionDetailPlaceholder != null) {
@@ -369,11 +490,27 @@ public class HistoryController {
             sessionSpeedGrid.setManaged(false);
         }
         
+        // 初始化记录详情显示区域（默认显示占位符）
+        if (recordDetailPlaceholder != null) {
+            recordDetailPlaceholder.setVisible(true);
+            recordDetailPlaceholder.setManaged(true);
+        }
+        if (recordInfoGrid != null) {
+            recordInfoGrid.setVisible(false);
+            recordInfoGrid.setManaged(false);
+        }
+        if (recordSpeedGrid != null) {
+            recordSpeedGrid.setVisible(false);
+            recordSpeedGrid.setManaged(false);
+        }
+        
         // 设置详细记录表格行选择监听器
         historyTable.getSelectionModel().selectedItemProperty().addListener(
             (observable, oldValue, newValue) -> {
                 if (newValue != null) {
                     onTableRowSelected(newValue);
+                } else {
+                    clearRecordDetail();
                 }
             }
         );
@@ -427,8 +564,140 @@ public class HistoryController {
         // 初始化删除按钮状态（默认禁用）
         deleteSessionButton.setDisable(true);
         
+        // 初始化过滤器
+        initializeFilters();
+        
         // 初始化时加载会话列表数据
         loadSessionList();
+    }
+    
+    /**
+     * 初始化过滤器组件
+     * 设置监听器和初始状态
+     */
+    private void initializeFilters() {
+        // 加载进程名列表到下拉框
+        loadProcessNameList();
+        
+        // 设置协议复选框的监听器
+        if (protocolTcpCheckBox != null) {
+            protocolTcpCheckBox.selectedProperty().addListener((obs, oldVal, newVal) -> onFilterChanged());
+        }
+        if (protocolUdpCheckBox != null) {
+            protocolUdpCheckBox.selectedProperty().addListener((obs, oldVal, newVal) -> onFilterChanged());
+        }
+        if (protocolOtherCheckBox != null) {
+            protocolOtherCheckBox.selectedProperty().addListener((obs, oldVal, newVal) -> onFilterChanged());
+        }
+        
+        // 设置应用下拉框的监听器
+        if (processNameComboBox != null) {
+            processNameComboBox.valueProperty().addListener((obs, oldVal, newVal) -> onFilterChanged());
+        }
+        
+        // 设置流量阈值输入框的监听器
+        if (minDownSpeedTextField != null) {
+            minDownSpeedTextField.textProperty().addListener((obs, oldVal, newVal) -> {
+                // 同步到滑块
+                try {
+                    if (newVal != null && !newVal.trim().isEmpty()) {
+                        double value = Double.parseDouble(newVal.trim());
+                        if (minDownSpeedSlider != null && value >= minDownSpeedSlider.getMin() && 
+                            value <= minDownSpeedSlider.getMax()) {
+                            minDownSpeedSlider.setValue(value);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    // 忽略无效输入
+                }
+                onFilterChanged();
+            });
+        }
+        
+        // 设置流量阈值滑块的监听器
+        if (minDownSpeedSlider != null) {
+            minDownSpeedSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
+                // 同步到输入框
+                if (minDownSpeedTextField != null) {
+                    minDownSpeedTextField.setText(String.format("%.1f", newVal.doubleValue()));
+                }
+                onFilterChanged();
+            });
+        }
+    }
+    
+    /**
+     * 从数据库加载进程名列表
+     */
+    private void loadProcessNameList() {
+        if (processNameComboBox == null) {
+            return;
+        }
+        
+        databaseService.getDistinctProcessNames()
+            .thenAccept(processNames -> {
+                Platform.runLater(() -> {
+                    processNameComboBox.getItems().clear();
+                    processNameComboBox.getItems().add("全部"); // 添加"全部"选项表示不过滤
+                    processNameComboBox.getItems().addAll(processNames);
+                });
+            })
+            .exceptionally(e -> {
+                Platform.runLater(() -> {
+                    System.err.println("[HistoryController] 加载进程名列表失败: " + e.getMessage());
+                });
+                return null;
+            });
+    }
+    
+    /**
+     * 过滤器变化事件处理（防抖刷新）
+     * 当用户调整过滤器参数时，延迟 300ms 后自动刷新显示结果
+     */
+    private void onFilterChanged() {
+        // 取消之前的刷新任务
+        if (debounceRefreshFuture != null && !debounceRefreshFuture.isCancelled()) {
+            debounceRefreshFuture.cancel(false);
+        }
+        
+        // 创建新的延迟刷新任务（300ms 防抖）
+        debounceRefreshFuture = debounceExecutor.schedule(() -> {
+            Platform.runLater(() -> {
+                // 只在详细记录标签页时刷新
+                if (mainTabPane.getSelectionModel().getSelectedIndex() == 1) {
+                    applyFiltersAndRefresh();
+                }
+            });
+        }, 300, TimeUnit.MILLISECONDS);
+    }
+    
+    /**
+     * 应用过滤器并刷新表格
+     */
+    private void applyFiltersAndRefresh() {
+        // 如果有当前查看的会话，使用会话过滤；否则加载所有记录
+        if (currentViewingSessionId != null) {
+            loadSessionDetailsWithFilter(currentViewingSessionId);
+        } else {
+            loadHistoryDataWithFilter();
+        }
+    }
+    
+    /**
+     * 清除过滤按钮点击事件
+     */
+    @FXML
+    protected void onClearFiltersClick() {
+        // 清除所有过滤器
+        if (protocolTcpCheckBox != null) protocolTcpCheckBox.setSelected(false);
+        if (protocolUdpCheckBox != null) protocolUdpCheckBox.setSelected(false);
+        if (protocolOtherCheckBox != null) protocolOtherCheckBox.setSelected(false);
+        if (processNameComboBox != null) processNameComboBox.setValue("全部");
+        if (minDownSpeedTextField != null) minDownSpeedTextField.setText("");
+        if (minDownSpeedSlider != null) minDownSpeedSlider.setValue(0);
+        
+        // 立即刷新（不需要防抖）
+        applyFiltersAndRefresh();
     }
     
     // ========== 事件处理方法 ==========
@@ -1189,7 +1458,7 @@ public class HistoryController {
         String ip = ipInputField.getText();
         if (ip == null || ip.trim().isEmpty()) {
             ipQueryStatusLabel.setText("请输入 IP 地址");
-            ipLocationTextArea.setText("");
+            displayIpLocationPlaceholder();
             return;
         }
         
@@ -1203,6 +1472,9 @@ public class HistoryController {
      * @param selectedRecord 选中的记录
      */
     private void onTableRowSelected(TrafficRecordDisplay selectedRecord) {
+        // 显示记录详情
+        loadRecordDetails(selectedRecord);
+        
         // 优先使用源IP地址，如果没有则使用目标IP地址
         String ipToQuery = selectedRecord.getSourceIp();
         if (ipToQuery == null || ipToQuery.trim().isEmpty()) {
@@ -1216,8 +1488,114 @@ public class HistoryController {
         } else {
             // 如果没有IP地址，清空输入框和显示区域
             ipInputField.setText("");
-            ipLocationTextArea.setText("");
+            displayIpLocationPlaceholder();
             ipQueryStatusLabel.setText("该记录没有IP地址信息");
+        }
+    }
+    
+    /**
+     * 加载并显示记录详情
+     * 
+     * @param record 选中的记录
+     */
+    private void loadRecordDetails(TrafficRecordDisplay record) {
+        if (record == null) {
+            clearRecordDetail();
+            return;
+        }
+        
+        // 隐藏占位符，显示详情网格
+        if (recordDetailPlaceholder != null) {
+            recordDetailPlaceholder.setVisible(false);
+            recordDetailPlaceholder.setManaged(false);
+        }
+        if (recordInfoGrid != null) {
+            recordInfoGrid.setVisible(true);
+            recordInfoGrid.setManaged(true);
+        }
+        if (recordSpeedGrid != null) {
+            recordSpeedGrid.setVisible(true);
+            recordSpeedGrid.setManaged(true);
+        }
+        
+        // 填充基本信息
+        if (recordIdLabel != null) {
+            recordIdLabel.setText(record.getId() != null ? record.getId().toString() : "--");
+        }
+        if (recordCaptureTimeLabel != null) {
+            recordCaptureTimeLabel.setText(record.getCaptureTime() != null && !record.getCaptureTime().isEmpty() 
+                ? record.getCaptureTime() : "--");
+        }
+        if (recordProtocolLabel != null) {
+            String protocol = record.getProtocol();
+            if (protocol != null && !protocol.isEmpty()) {
+                recordProtocolLabel.setText(protocol);
+                // 根据协议类型设置颜色（与表格中的协议标签样式一致）
+                switch (protocol.toUpperCase()) {
+                    case "TCP":
+                        recordProtocolLabel.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; " +
+                            "-fx-padding: 2px 8px; -fx-background-radius: 3px; -fx-font-size: 12px;");
+                        break;
+                    case "UDP":
+                        recordProtocolLabel.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white; " +
+                            "-fx-padding: 2px 8px; -fx-background-radius: 3px; -fx-font-size: 12px;");
+                        break;
+                    default:
+                        recordProtocolLabel.setStyle("-fx-background-color: #757575; -fx-text-fill: white; " +
+                            "-fx-padding: 2px 8px; -fx-background-radius: 3px; -fx-font-size: 12px;");
+                        break;
+                }
+            } else {
+                recordProtocolLabel.setText("--");
+                recordProtocolLabel.setStyle("");
+            }
+        }
+        if (recordSourceIpLabel != null) {
+            recordSourceIpLabel.setText(record.getSourceIp() != null && !record.getSourceIp().isEmpty() 
+                ? record.getSourceIp() : "--");
+        }
+        if (recordDestIpLabel != null) {
+            recordDestIpLabel.setText(record.getDestIp() != null && !record.getDestIp().isEmpty() 
+                ? record.getDestIp() : "--");
+        }
+        if (recordProcessNameLabel != null) {
+            recordProcessNameLabel.setText(record.getProcessName() != null && !record.getProcessName().isEmpty() 
+                ? record.getProcessName() : "--");
+        }
+        
+        // 填充速度信息
+        if (recordDownSpeedLabel != null) {
+            if (record.getDownSpeed() != null) {
+                recordDownSpeedLabel.setText(String.format("%.2f", record.getDownSpeed()));
+            } else {
+                recordDownSpeedLabel.setText("--");
+            }
+        }
+        if (recordUpSpeedLabel != null) {
+            if (record.getUpSpeed() != null) {
+                recordUpSpeedLabel.setText(String.format("%.2f", record.getUpSpeed()));
+            } else {
+                recordUpSpeedLabel.setText("--");
+            }
+        }
+    }
+    
+    /**
+     * 清空记录详情显示
+     */
+    private void clearRecordDetail() {
+        // 显示占位符，隐藏详情网格
+        if (recordDetailPlaceholder != null) {
+            recordDetailPlaceholder.setVisible(true);
+            recordDetailPlaceholder.setManaged(true);
+        }
+        if (recordInfoGrid != null) {
+            recordInfoGrid.setVisible(false);
+            recordInfoGrid.setManaged(false);
+        }
+        if (recordSpeedGrid != null) {
+            recordSpeedGrid.setVisible(false);
+            recordSpeedGrid.setManaged(false);
         }
     }
     
@@ -1230,7 +1608,7 @@ public class HistoryController {
         // 禁用查询按钮，防止重复点击
         queryIpButton.setDisable(true);
         ipQueryStatusLabel.setText("正在查询 IP: " + ip + "...");
-        ipLocationTextArea.setText("正在查询，请稍候...");
+        displayIpLocationLoading();
         
         // 使用异步查询，避免阻塞 UI 线程
         ipLocationService.queryLocationAsync(ip)
@@ -1238,46 +1616,13 @@ public class HistoryController {
                 // 在主线程中更新 UI
                 Platform.runLater(() -> {
                     if (locationInfo.isSuccess()) {
-                        // 查询成功，格式化显示信息
-                        StringBuilder info = new StringBuilder();
-                        info.append("IP 地址: ").append(locationInfo.getIp()).append("\n\n");
-                        info.append("地理位置信息:\n");
-                        info.append("  国家: ").append(locationInfo.getCountry()).append("\n");
-                        info.append("  地区: ").append(locationInfo.getRegion()).append("\n");
-                        info.append("  城市: ").append(locationInfo.getCity()).append("\n");
-                        info.append("  国家代码: ").append(locationInfo.getCountryCode()).append("\n");
-                        info.append("  ISP: ").append(locationInfo.getIsp()).append("\n\n");
-                        info.append("完整位置: ").append(locationInfo.getFormattedLocation());
-                        
-                        ipLocationTextArea.setText(info.toString());
+                        // 查询成功，使用结构化Label显示信息
+                        displayIpLocationInfo(locationInfo);
                         ipQueryStatusLabel.setText("查询完成 - " + locationInfo.getShortLocation());
                     } else {
                         // 查询失败
                         String errorMsg = locationInfo.getErrorMessage();
-                        String detailedMessage;
-                        
-                        if (errorMsg != null && errorMsg.contains("私有IP")) {
-                            detailedMessage = "无法查询 IP 地理位置信息\n\n" +
-                                "原因：这是一个私有/本地 IP 地址\n\n" +
-                                "私有 IP 地址包括：\n" +
-                                "• 127.0.0.1 (本地回环)\n" +
-                                "• 192.168.x.x (局域网)\n" +
-                                "• 10.x.x.x (私有网络)\n" +
-                                "• 172.16-31.x.x (私有网络)\n\n" +
-                                "提示：只有公网 IP 地址才能查询地理位置信息。\n" +
-                                "请尝试查询表格中其他记录的公网 IP 地址。";
-                        } else {
-                            detailedMessage = "无法查询 IP 地理位置信息\n\n" +
-                                "可能的原因：\n" +
-                                "1. IP 地址格式无效或为空\n" +
-                                "2. 这是私有/本地 IP 地址（无法查询地理位置）\n" +
-                                "3. 网络连接异常\n" +
-                                "4. API 服务暂时不可用\n" +
-                                "5. 达到 API 频率限制（每分钟45次）\n\n" +
-                                "错误信息: " + (errorMsg != null ? errorMsg : "未知错误");
-                        }
-                        
-                        ipLocationTextArea.setText(detailedMessage);
+                        displayIpLocationError(errorMsg);
                         ipQueryStatusLabel.setText("查询失败 - " + (errorMsg != null ? errorMsg : "未知原因"));
                     }
                     
@@ -1288,13 +1633,125 @@ public class HistoryController {
             .exceptionally(throwable -> {
                 // 处理异常
                 Platform.runLater(() -> {
-                    ipLocationTextArea.setText("查询过程中发生异常: " + 
+                    displayIpLocationError("查询过程中发生异常: " + 
                         (throwable.getMessage() != null ? throwable.getMessage() : "未知错误"));
                     ipQueryStatusLabel.setText("查询异常");
                     queryIpButton.setDisable(false);
                 });
                 return null;
             });
+    }
+    
+    /**
+     * 显示IP归属地占位符信息
+     */
+    private void displayIpLocationPlaceholder() {
+        if (ipLocationInfoBox == null) return;
+        
+        ipLocationInfoBox.getChildren().clear();
+        
+        Label placeholder = new Label("IP 归属地信息将显示在这里...\n\n提示：\n1. 在输入框中输入 IP 地址并点击\"查询\"按钮\n2. 或点击表格中的任意行，系统将尝试从该行数据中提取 IP 地址");
+        placeholder.setWrapText(true);
+        placeholder.setStyle("-fx-font-size: 12px; -fx-text-fill: #757575; -fx-padding: 10px;");
+        ipLocationInfoBox.getChildren().add(placeholder);
+    }
+    
+    /**
+     * 显示IP归属地加载状态
+     */
+    private void displayIpLocationLoading() {
+        if (ipLocationInfoBox == null) return;
+        
+        ipLocationInfoBox.getChildren().clear();
+        
+        Label loadingLabel = new Label("正在查询，请稍候...");
+        loadingLabel.setStyle("-fx-font-size: 13px; -fx-text-fill: #0078D7; -fx-font-weight: 500; -fx-padding: 10px;");
+        ipLocationInfoBox.getChildren().add(loadingLabel);
+    }
+    
+    /**
+     * 显示IP归属地信息（结构化Label）
+     */
+    private void displayIpLocationInfo(IPLocationInfo locationInfo) {
+        if (ipLocationInfoBox == null) return;
+        
+        ipLocationInfoBox.getChildren().clear();
+        
+        // IP 地址
+        addInfoLabel("IP 地址", locationInfo.getIp(), true);
+        
+        // 国家
+        if (locationInfo.getCountry() != null && !locationInfo.getCountry().isEmpty() && !locationInfo.getCountry().equals("未知")) {
+            addInfoLabel("国家", locationInfo.getCountry(), false);
+        }
+        
+        // 省份/州
+        if (locationInfo.getRegion() != null && !locationInfo.getRegion().isEmpty() && !locationInfo.getRegion().equals("未知")) {
+            addInfoLabel("省份/州", locationInfo.getRegion(), false);
+        }
+        
+        // 城市
+        if (locationInfo.getCity() != null && !locationInfo.getCity().isEmpty() && !locationInfo.getCity().equals("未知")) {
+            addInfoLabel("城市", locationInfo.getCity(), false);
+        }
+        
+        // ISP
+        if (locationInfo.getIsp() != null && !locationInfo.getIsp().isEmpty() && !locationInfo.getIsp().equals("未知")) {
+            addInfoLabel("ISP", locationInfo.getIsp(), false);
+        }
+        
+        // 国家代码
+        if (locationInfo.getCountryCode() != null && !locationInfo.getCountryCode().isEmpty() && !locationInfo.getCountryCode().equals("未知")) {
+            addInfoLabel("国家代码", locationInfo.getCountryCode(), false);
+        }
+        
+        // ASN
+        if (locationInfo.getAsn() != null && !locationInfo.getAsn().isEmpty() && !locationInfo.getAsn().equals("未知")) {
+            addInfoLabel("ASN", locationInfo.getAsn(), false);
+        }
+        
+        // 网络类型
+        if (locationInfo.getNetworkType() != null && !locationInfo.getNetworkType().isEmpty() && !locationInfo.getNetworkType().equals("未知")) {
+            addInfoLabel("网络类型", locationInfo.getNetworkType(), false);
+        }
+        
+        // 风险评分
+        if (locationInfo.getRiskScore() != null) {
+            addInfoLabel("风险评分", String.valueOf(locationInfo.getRiskScore()), false);
+        }
+    }
+    
+    /**
+     * 添加信息标签到显示区域
+     */
+    private void addInfoLabel(String label, String value, boolean isFirst) {
+        HBox row = new HBox(10);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.setPadding(new Insets(6, 0, 6, 0));
+        
+        Label keyLabel = new Label(label + ":");
+        keyLabel.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: #212121; -fx-min-width: 80px;");
+        
+        Label valueLabel = new Label(value);
+        valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #0078D7; -fx-wrap-text: true;");
+        valueLabel.setWrapText(true);
+        
+        row.getChildren().addAll(keyLabel, valueLabel);
+        ipLocationInfoBox.getChildren().add(row);
+    }
+    
+    /**
+     * 显示IP归属地错误信息
+     */
+    private void displayIpLocationError(String errorMsg) {
+        if (ipLocationInfoBox == null) return;
+        
+        ipLocationInfoBox.getChildren().clear();
+        
+        Label errorLabel = new Label("查询失败\n\n" + errorMsg);
+        errorLabel.setWrapText(true);
+        errorLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #DC3545; -fx-padding: 10px;");
+        ipLocationInfoBox.getChildren().add(errorLabel);
     }
     
     // ========== 核心业务方法 ==========
@@ -1398,6 +1855,7 @@ public class HistoryController {
                                 record.getSourceIp(),
                                 record.getDestIp(),
                                 record.getProcessName(),
+                                record.getProtocol(),
                                 formatTimestamp(record.getCaptureTime())
                             );
                             historyData.add(display);
@@ -1593,6 +2051,13 @@ public class HistoryController {
                     // 转换并添加数据，ID从1开始重新编号
                     int displayId = 1;
                     for (DatabaseService.TrafficRecord record : records) {
+                        String protocol = record.getProtocol();
+                        // 调试输出
+                        if (protocol == null || protocol.isEmpty()) {
+                            System.out.println("[HistoryController] 警告：记录协议为空，记录ID: " + record.getRecordId() + 
+                                ", 会话ID: " + record.getSessionId());
+                        }
+                        
                         TrafficRecordDisplay display = new TrafficRecordDisplay(
                             (long) displayId,  // 使用重新编号的ID
                             record.getIfaceName(),
@@ -1601,6 +2066,7 @@ public class HistoryController {
                             record.getSourceIp(),
                             record.getDestIp(),
                             record.getProcessName(),
+                            protocol != null ? protocol : "其他",  // 如果协议为空，使用默认值
                             formatTimestamp(record.getRecordTime())
                         );
                         historyData.add(display);
@@ -1691,6 +2157,7 @@ public class HistoryController {
                                 record.getSourceIp(),
                                 record.getDestIp(),
                                 record.getProcessName(),
+                                record.getProtocol(),
                                 formatTimestamp(record.getCaptureTime())
                             );
                             historyData.add(display);
@@ -1731,6 +2198,239 @@ public class HistoryController {
     }
     
     /**
+     * 使用过滤器加载历史数据（所有会话的记录）
+     * 
+     * <p>此方法根据用户选择的过滤条件查询并显示流量记录。</p>
+     */
+    private void loadHistoryDataWithFilter() {
+        // 清空当前查看的会话ID（因为加载所有记录）
+        currentViewingSessionId = null;
+        
+        // 禁用刷新按钮，防止重复点击
+        refreshButton.setDisable(true);
+        statusLabel.setText("正在加载数据...");
+        
+        // 构建查询条件
+        TrafficRecordQueryBuilder queryBuilder = new TrafficRecordQueryBuilder();
+        
+        // 收集选中的协议
+        List<String> selectedProtocols = new ArrayList<>();
+        if (protocolTcpCheckBox != null && protocolTcpCheckBox.isSelected()) {
+            selectedProtocols.add("TCP");
+        }
+        if (protocolUdpCheckBox != null && protocolUdpCheckBox.isSelected()) {
+            selectedProtocols.add("UDP");
+        }
+        if (protocolOtherCheckBox != null && protocolOtherCheckBox.isSelected()) {
+            selectedProtocols.add("其他");
+        }
+        queryBuilder.setProtocols(selectedProtocols);
+        
+        // 设置应用过滤
+        if (processNameComboBox != null && processNameComboBox.getValue() != null) {
+            String selectedProcess = processNameComboBox.getValue();
+            if (!"全部".equals(selectedProcess)) {
+                queryBuilder.setProcessName(selectedProcess);
+            }
+        }
+        
+        // 设置流量阈值过滤
+        if (minDownSpeedTextField != null && minDownSpeedTextField.getText() != null) {
+            try {
+                String text = minDownSpeedTextField.getText().trim();
+                if (!text.isEmpty()) {
+                    double minSpeed = Double.parseDouble(text);
+                    if (minSpeed > 0) {
+                        queryBuilder.setMinDownSpeed(minSpeed);
+                    }
+                }
+            } catch (NumberFormatException e) {
+                // 忽略无效输入
+            }
+        }
+        
+        // 创建后台任务查询数据
+        Task<List<DatabaseService.TrafficRecord>> queryTask = new Task<>() {
+            @Override
+            protected List<DatabaseService.TrafficRecord> call() throws Exception {
+                // 在后台线程中使用过滤器查询历史记录
+                return databaseService.queryRecordsWithFilter(queryBuilder).get();
+            }
+            
+            @Override
+            protected void succeeded() {
+                // 查询成功后的处理
+                try {
+                    List<DatabaseService.TrafficRecord> records = getValue();
+                    
+                    // 在主线程中更新 UI
+                    Platform.runLater(() -> {
+                        // 清空旧数据
+                        historyData.clear();
+                        
+                        // 转换并添加数据，ID从1开始重新编号
+                        int displayId = 1;
+                        for (DatabaseService.TrafficRecord record : records) {
+                            TrafficRecordDisplay display = new TrafficRecordDisplay(
+                                (long) displayId,  // 使用重新编号的ID
+                                record.getIfaceName(),
+                                record.getDownSpeed(),
+                                record.getUpSpeed(),
+                                record.getSourceIp(),
+                                record.getDestIp(),
+                                record.getProcessName(),
+                                record.getProtocol(),
+                                formatTimestamp(record.getRecordTime())
+                            );
+                            historyData.add(display);
+                            displayId++;
+                        }
+                        
+                        // 更新状态标签
+                        statusLabel.setText(String.format("共加载 %d 条记录（已应用过滤）", records.size()));
+                        
+                        // 恢复按钮状态
+                        refreshButton.setDisable(false);
+                    });
+                    
+                } catch (Exception e) {
+                    Platform.runLater(() -> {
+                        statusLabel.setText("加载数据失败: " + e.getMessage());
+                        refreshButton.setDisable(false);
+                    });
+                }
+            }
+            
+            @Override
+            protected void failed() {
+                // 查询失败后的处理
+                Platform.runLater(() -> {
+                    Throwable exception = getException();
+                    statusLabel.setText("加载数据失败: " + 
+                        (exception != null ? exception.getMessage() : "未知错误"));
+                    refreshButton.setDisable(false);
+                });
+            }
+        };
+        
+        // 启动后台任务
+        Thread queryThread = new Thread(queryTask);
+        queryThread.setDaemon(true);
+        queryThread.start();
+    }
+    
+    /**
+     * 使用过滤器加载指定会话的详细记录
+     * 
+     * @param sessionId 会话 ID
+     */
+    private void loadSessionDetailsWithFilter(int sessionId) {
+        // 记录当前查看的会话ID
+        currentViewingSessionId = sessionId;
+        
+        refreshButton.setDisable(true);
+        statusLabel.setText("正在加载会话详细记录...");
+        
+        // 构建查询条件
+        TrafficRecordQueryBuilder queryBuilder = new TrafficRecordQueryBuilder();
+        queryBuilder.setSessionId(sessionId);
+        
+        // 收集选中的协议
+        List<String> selectedProtocols = new ArrayList<>();
+        if (protocolTcpCheckBox != null && protocolTcpCheckBox.isSelected()) {
+            selectedProtocols.add("TCP");
+        }
+        if (protocolUdpCheckBox != null && protocolUdpCheckBox.isSelected()) {
+            selectedProtocols.add("UDP");
+        }
+        if (protocolOtherCheckBox != null && protocolOtherCheckBox.isSelected()) {
+            selectedProtocols.add("其他");
+        }
+        queryBuilder.setProtocols(selectedProtocols);
+        
+        // 设置应用过滤
+        if (processNameComboBox != null && processNameComboBox.getValue() != null) {
+            String selectedProcess = processNameComboBox.getValue();
+            if (!"全部".equals(selectedProcess)) {
+                queryBuilder.setProcessName(selectedProcess);
+            }
+        }
+        
+        // 设置流量阈值过滤
+        if (minDownSpeedTextField != null && minDownSpeedTextField.getText() != null) {
+            try {
+                String text = minDownSpeedTextField.getText().trim();
+                if (!text.isEmpty()) {
+                    double minSpeed = Double.parseDouble(text);
+                    if (minSpeed > 0) {
+                        queryBuilder.setMinDownSpeed(minSpeed);
+                    }
+                }
+            } catch (NumberFormatException e) {
+                // 忽略无效输入
+            }
+        }
+        
+        Task<List<DatabaseService.TrafficRecord>> queryTask = new Task<>() {
+            @Override
+            protected List<DatabaseService.TrafficRecord> call() throws Exception {
+                return databaseService.queryRecordsWithFilter(queryBuilder).get();
+            }
+            
+            @Override
+            protected void succeeded() {
+                try {
+                    List<DatabaseService.TrafficRecord> records = getValue();
+                    
+                    Platform.runLater(() -> {
+                        historyData.clear();
+                        
+                        // ID从1开始重新编号
+                        int displayId = 1;
+                        for (DatabaseService.TrafficRecord record : records) {
+                            TrafficRecordDisplay display = new TrafficRecordDisplay(
+                                (long) displayId,  // 使用重新编号的ID
+                                record.getIfaceName(),
+                                record.getDownSpeed(),
+                                record.getUpSpeed(),
+                                record.getSourceIp(),
+                                record.getDestIp(),
+                                record.getProcessName(),
+                                record.getProtocol(),
+                                formatTimestamp(record.getRecordTime())
+                            );
+                            historyData.add(display);
+                            displayId++;
+                        }
+                        
+                        statusLabel.setText(String.format("会话 #%d 共 %d 条记录（已应用过滤）", sessionId, records.size()));
+                        refreshButton.setDisable(false);
+                    });
+                } catch (Exception e) {
+                    Platform.runLater(() -> {
+                        statusLabel.setText("加载详细记录失败: " + e.getMessage());
+                        refreshButton.setDisable(false);
+                    });
+                }
+            }
+            
+            @Override
+            protected void failed() {
+                Platform.runLater(() -> {
+                    Throwable exception = getException();
+                    statusLabel.setText("加载详细记录失败: " + 
+                        (exception != null ? exception.getMessage() : "未知错误"));
+                    refreshButton.setDisable(false);
+                });
+            }
+        };
+        
+        Thread queryThread = new Thread(queryTask);
+        queryThread.setDaemon(true);
+        queryThread.start();
+    }
+    
+    /**
      * 格式化时间戳为字符串
      * 
      * @param timestamp 时间戳
@@ -1757,11 +2457,12 @@ public class HistoryController {
         private final String sourceIp;
         private final String destIp;
         private final String processName;
+        private final String protocol;
         private final String captureTime;
         
         public TrafficRecordDisplay(Long id, String ifaceName, Double downSpeed, 
                                    Double upSpeed, String sourceIp, String destIp, 
-                                   String processName, String captureTime) {
+                                   String processName, String protocol, String captureTime) {
             this.id = id;
             this.ifaceName = ifaceName;
             this.downSpeed = downSpeed;
@@ -1769,6 +2470,7 @@ public class HistoryController {
             this.sourceIp = sourceIp;
             this.destIp = destIp;
             this.processName = processName;
+            this.protocol = protocol;
             this.captureTime = captureTime;
         }
         
@@ -1780,6 +2482,14 @@ public class HistoryController {
         public String getSourceIp() { return sourceIp != null ? sourceIp : ""; }
         public String getDestIp() { return destIp != null ? destIp : ""; }
         public String getProcessName() { return processName != null ? processName : "未知进程"; }
+        public String getProtocol() { 
+            String result = protocol != null ? protocol : "";
+            // 调试输出
+            if (result.isEmpty()) {
+                System.out.println("[TrafficRecordDisplay] 警告：协议字段为空，记录ID: " + id);
+            }
+            return result;
+        }
         public String getCaptureTime() { return captureTime; }
     }
     
@@ -1848,6 +2558,130 @@ public class HistoryController {
                 // 格式化显示，保留指定小数位数
                 String format = "%." + decimalPlaces + "f";
                 setText(String.format(format, item));
+            }
+        }
+    }
+    
+    /**
+     * 速度进度条表格单元格
+     * 用于在单元格背景显示动态进度条，表示流量速度
+     */
+    private static class SpeedProgressBarTableCell extends javafx.scene.control.TableCell<TrafficRecordDisplay, Double> {
+        private final javafx.scene.layout.StackPane stackPane;
+        private final javafx.scene.layout.Region progressBar;
+        private final javafx.scene.control.Label valueLabel;
+        private final boolean isDownload;
+        private static final double MAX_SPEED = 10000.0; // 最大速度阈值（KB/s）
+        
+        public SpeedProgressBarTableCell(boolean isDownload) {
+            this.isDownload = isDownload;
+            
+            // 创建进度条背景
+            progressBar = new Region();
+            progressBar.setMaxHeight(Double.MAX_VALUE);
+            progressBar.setMaxWidth(Double.MAX_VALUE);
+            
+            // 创建数值标签
+            valueLabel = new Label();
+            valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #212121; -fx-font-weight: 500;");
+            valueLabel.setAlignment(Pos.CENTER_LEFT);
+            
+            // 创建堆叠面板
+            stackPane = new StackPane();
+            stackPane.setAlignment(Pos.CENTER_LEFT);
+            stackPane.setPadding(new Insets(4, 8, 4, 8));
+            stackPane.getChildren().addAll(progressBar, valueLabel);
+        }
+        
+        @Override
+        protected void updateItem(Double item, boolean empty) {
+            super.updateItem(item, empty);
+            
+            if (empty || item == null) {
+                setGraphic(null);
+                setText(null);
+            } else {
+                // 计算进度（基于最大速度）
+                double progress = Math.min(item / MAX_SPEED, 1.0);
+                
+                // 设置进度条宽度
+                progressBar.prefWidthProperty().bind(stackPane.widthProperty().multiply(progress));
+                
+                // 设置文本
+                valueLabel.setText(String.format("%.2f", item));
+                
+                // 根据速度大小调整进度条颜色（科技蓝渐变）
+                if (item > MAX_SPEED * 0.7) {
+                    // 高流量：深蓝色
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #004578, #0078D7); " +
+                                        "-fx-background-radius: 3px;");
+                } else if (item > MAX_SPEED * 0.4) {
+                    // 中流量：蓝色
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #0078D7, #40A5F5); " +
+                                        "-fx-background-radius: 3px;");
+                } else {
+                    // 低流量：浅蓝色
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #40A5F5, #B3D9F2); " +
+                                        "-fx-background-radius: 3px;");
+                }
+                
+                setGraphic(stackPane);
+                setText(null);
+            }
+        }
+    }
+    
+    /**
+     * 协议标签表格单元格
+     * 根据协议类型显示不同颜色的标签
+     */
+    private static class ProtocolLabelTableCell extends javafx.scene.control.TableCell<TrafficRecordDisplay, String> {
+        private final Label protocolLabel;
+        
+        public ProtocolLabelTableCell() {
+            protocolLabel = new Label();
+            protocolLabel.setAlignment(Pos.CENTER);
+            protocolLabel.setPadding(new Insets(4, 12, 4, 12));
+            protocolLabel.setStyle("-fx-background-radius: 12px; -fx-font-size: 11px; " +
+                                  "-fx-font-weight: bold; -fx-text-fill: white;");
+        }
+        
+        @Override
+        protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            
+            if (empty || item == null || item.isEmpty()) {
+                setGraphic(null);
+                setText(null);
+            } else {
+                protocolLabel.setText(item);
+                
+                // 根据协议类型设置不同的颜色
+                String protocol = item.toUpperCase();
+                if ("TCP".equals(protocol)) {
+                    // TCP：科技蓝
+                    protocolLabel.setStyle("-fx-background-color: #0078D7; " +
+                                          "-fx-background-radius: 12px; -fx-font-size: 11px; " +
+                                          "-fx-font-weight: bold; -fx-text-fill: white;");
+                } else if ("UDP".equals(protocol)) {
+                    // UDP：活力橙
+                    protocolLabel.setStyle("-fx-background-color: #F57C00; " +
+                                          "-fx-background-radius: 12px; -fx-font-size: 11px; " +
+                                          "-fx-font-weight: bold; -fx-text-fill: white;");
+                } else if ("ICMP".equals(protocol)) {
+                    // ICMP：绿色
+                    protocolLabel.setStyle("-fx-background-color: #28A745; " +
+                                          "-fx-background-radius: 12px; -fx-font-size: 11px; " +
+                                          "-fx-font-weight: bold; -fx-text-fill: white;");
+                } else {
+                    // 其他：灰色
+                    protocolLabel.setStyle("-fx-background-color: #6C757D; " +
+                                          "-fx-background-radius: 12px; -fx-font-size: 11px; " +
+                                          "-fx-font-weight: bold; -fx-text-fill: white;");
+                }
+                
+                setGraphic(protocolLabel);
+                setText(null);
             }
         }
     }

@@ -12,10 +12,15 @@
 <?import javafx.scene.control.TableView?>
 <?import javafx.scene.control.TitledPane?>
 <?import javafx.scene.control.TextArea?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.MenuButton?>
+<?import javafx.scene.control.MenuItem?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.AnchorPane?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.ColumnConstraints?>
 
 <!--
     主界面布局文件
@@ -36,12 +41,17 @@
         <AnchorPane>
             <!-- 标题标签：提示用户选择监控网卡 -->
             <Label fx:id="titleLabel" text="请选择监控网卡" 
-                   style="-fx-font-size: 18px; -fx-font-weight: bold;"
+                   styleClass="title-label"
+                   style="-fx-font-family: 'Microsoft YaHei', '微软雅黑', sans-serif; -fx-font-weight: bold;"
                    AnchorPane.leftAnchor="0.0" AnchorPane.topAnchor="0.0"/>
             
             <!-- 右上角操作按钮组 -->
             <HBox spacing="10.0" alignment="CENTER_RIGHT"
                   AnchorPane.rightAnchor="0.0" AnchorPane.topAnchor="0.0">
+                <!-- 帮助按钮：打开帮助中心窗口 -->
+                <Button fx:id="helpButton" text="帮助" onAction="#onHelpButtonClick"
+                        style="-fx-pref-width: 80px;"/>
+                
                 <!-- 查看历史数据按钮：打开历史数据查看窗口 -->
                 <Button fx:id="viewHistoryButton" text="查看历史数据" onAction="#onViewHistoryButtonClick"
                         style="-fx-pref-width: 120px;"/>
@@ -59,61 +69,102 @@
 
     <!-- 主要内容区域 -->
     <center>
-        <VBox spacing="15.0">
-            <!-- 网卡选择区域：使用 ComboBox 下拉框选择网卡 -->
-            <HBox spacing="10.0" alignment="CENTER_LEFT">
-                <ComboBox fx:id="networkInterfaceComboBox" promptText="请选择要监控的网卡..." 
-                          prefWidth="400.0" HBox.hgrow="ALWAYS"/>
-                <Button fx:id="refreshNICButton" text="刷新" onAction="#onRefreshButtonClick"
-                        style="-fx-pref-width: 80px;"/>
-            </HBox>
-
-            <!-- 概览看板：实时数据卡片 -->
-            <Label text="流量概览" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
-            <HBox spacing="15.0" alignment="CENTER_LEFT">
+        <VBox spacing="20.0">
+            <!-- 控制区域：网卡选择、BPF 输入和按钮组 -->
+            <VBox styleClass="control-panel" spacing="12.0">
+                <HBox spacing="10.0" alignment="CENTER_LEFT">
+                    <ComboBox fx:id="networkInterfaceComboBox" promptText="请选择要监控的网卡..." 
+                              prefWidth="400.0" HBox.hgrow="ALWAYS"/>
+                    <Button fx:id="refreshNICButton" text="刷新" onAction="#onRefreshButtonClick"
+                            style="-fx-pref-width: 80px;"/>
+                </HBox>
+                <!-- BPF 过滤表达式输入框和预设菜单 -->
+                <HBox spacing="5.0" alignment="CENTER_LEFT">
+                    <TextField fx:id="bpfFilterTextField" promptText="输入 BPF 过滤表达式 (如: tcp and port 80)..." 
+                               HBox.hgrow="ALWAYS" styleClass="bpf-filter-input"/>
+                    <MenuButton fx:id="bpfPresetMenuButton" text="快捷预设菜单" style="-fx-pref-width: 140px;">
+                        <items>
+                            <MenuItem text="仅限 Web 流量" onAction="#onBpfPresetWebTraffic"/>
+                            <MenuItem text="排除本机会话" onAction="#onBpfPresetExcludeLocal"/>
+                            <MenuItem text="DNS 监控" onAction="#onBpfPresetDns"/>
+                            <MenuItem text="大包屏蔽" onAction="#onBpfPresetSmallPackets"/>
+                        </items>
+                    </MenuButton>
+                </HBox>
+            </VBox>
+            
+            <!-- 数据统计卡片（GridPane布局） -->
+            <GridPane hgap="15.0" vgap="15.0" VBox.vgrow="NEVER">
+                <columnConstraints>
+                    <ColumnConstraints hgrow="ALWAYS" minWidth="200.0" prefWidth="250.0"/>
+                    <ColumnConstraints hgrow="ALWAYS" minWidth="200.0" prefWidth="250.0"/>
+                    <ColumnConstraints hgrow="ALWAYS" minWidth="200.0" prefWidth="250.0"/>
+                    <ColumnConstraints hgrow="ALWAYS" minWidth="200.0" prefWidth="250.0"/>
+                </columnConstraints>
+                
                 <!-- 实时下行速度卡片 -->
-                <VBox styleClass="overview-card" spacing="5.0" prefWidth="180.0">
-                    <Label text="实时下行" styleClass="overview-card-title"/>
-                    <HBox spacing="4.0" alignment="BASELINE_LEFT">
-                        <Label fx:id="realtimeDownLabel" text="0.00" styleClass="overview-card-value"/>
-                        <Label text="KB/s" styleClass="overview-card-unit"/>
+                <VBox styleClass="stats-card download" spacing="8.0" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                    <HBox spacing="8.0" alignment="CENTER_LEFT">
+                        <Label text="⬇" styleClass="stats-card-icon"/>
+                        <VBox spacing="4.0">
+                            <Label text="实时下行" styleClass="stats-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="realtimeDownLabel" text="0.00" styleClass="stats-card-value"/>
+                                <Label text="KB/s" styleClass="stats-card-unit"/>
+                            </HBox>
+                        </VBox>
                     </HBox>
                 </VBox>
                 
                 <!-- 实时上行速度卡片 -->
-                <VBox styleClass="overview-card" spacing="5.0" prefWidth="180.0">
-                    <Label text="实时上行" styleClass="overview-card-title"/>
-                    <HBox spacing="4.0" alignment="BASELINE_LEFT">
-                        <Label fx:id="realtimeUpLabel" text="0.00" styleClass="overview-card-value"/>
-                        <Label text="KB/s" styleClass="overview-card-unit"/>
+                <VBox styleClass="stats-card upload" spacing="8.0" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                    <HBox spacing="8.0" alignment="CENTER_LEFT">
+                        <Label text="⬆" styleClass="stats-card-icon"/>
+                        <VBox spacing="4.0">
+                            <Label text="实时上行" styleClass="stats-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="realtimeUpLabel" text="0.00" styleClass="stats-card-value"/>
+                                <Label text="KB/s" styleClass="stats-card-unit"/>
+                            </HBox>
+                        </VBox>
                     </HBox>
                 </VBox>
                 
                 <!-- 峰值速度卡片 -->
-                <VBox styleClass="overview-card" spacing="5.0" prefWidth="180.0">
-                    <Label text="峰值速度" styleClass="overview-card-title"/>
-                    <HBox spacing="4.0" alignment="BASELINE_LEFT">
-                        <Label fx:id="peakSpeedLabel" text="0.00" styleClass="overview-card-value"/>
-                        <Label text="KB/s" styleClass="overview-card-unit"/>
+                <VBox styleClass="stats-card peak" spacing="8.0" GridPane.columnIndex="2" GridPane.rowIndex="0">
+                    <HBox spacing="8.0" alignment="CENTER_LEFT">
+                        <Label text="📈" styleClass="stats-card-icon"/>
+                        <VBox spacing="4.0">
+                            <Label text="峰值速度" styleClass="stats-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="peakSpeedLabel" text="0.00" styleClass="stats-card-value"/>
+                                <Label text="KB/s" styleClass="stats-card-unit"/>
+                            </HBox>
+                        </VBox>
                     </HBox>
                 </VBox>
                 
                 <!-- 总流量卡片 -->
-                <VBox styleClass="overview-card" spacing="5.0" prefWidth="180.0">
-                    <Label text="本次统计总流量" styleClass="overview-card-title"/>
-                    <HBox spacing="4.0" alignment="BASELINE_LEFT">
-                        <Label fx:id="totalTrafficLabel" text="0.00" styleClass="overview-card-value"/>
-                        <Label text="MB" styleClass="overview-card-unit"/>
+                <VBox styleClass="stats-card total" spacing="8.0" GridPane.columnIndex="3" GridPane.rowIndex="0">
+                    <HBox spacing="8.0" alignment="CENTER_LEFT">
+                        <Label text="📊" styleClass="stats-card-icon"/>
+                        <VBox spacing="4.0">
+                            <Label text="总流量" styleClass="stats-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="totalTrafficLabel" text="0.00" styleClass="stats-card-value"/>
+                                <Label text="MB" styleClass="stats-card-unit"/>
+                            </HBox>
+                        </VBox>
                     </HBox>
                 </VBox>
-            </HBox>
+            </GridPane>
 
             <!-- 实时流量波形图：显示网络流量的实时变化
                  X轴：时间（CategoryAxis）
                  Y轴：流量 KB/s（NumberAxis）
                  禁用动画以提升实时渲染性能 -->
-            <Label text="实时流量监控" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
-            <LineChart fx:id="trafficChart" animated="false" VBox.vgrow="ALWAYS" createSymbols="false" styleClass="area-chart">
+            <Label text="实时流量监控" styleClass="section-label" style="-fx-font-family: 'Microsoft YaHei', '微软雅黑', sans-serif; -fx-font-weight: bold;"/>
+            <LineChart fx:id="trafficChart" animated="false" VBox.vgrow="ALWAYS" createSymbols="true" styleClass="area-chart">
                 <xAxis>
                     <CategoryAxis label="时间" />
                 </xAxis>
@@ -124,7 +175,7 @@
             </LineChart>
 
             <!-- 进程流量监控面板 -->
-            <TitledPane text="进程流量详情" collapsible="true" expanded="true">
+            <TitledPane text="进程流量详情" collapsible="true" expanded="true" style="-fx-font-family: 'Microsoft YaHei', '微软雅黑', sans-serif; -fx-font-weight: bold;">
                 <TableView fx:id="processTrafficTable" VBox.vgrow="ALWAYS">
                     <columns>
                         <TableColumn fx:id="processNameColumn" text="应用" prefWidth="200.0" />

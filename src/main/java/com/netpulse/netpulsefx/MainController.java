@@ -1,7 +1,10 @@
 package com.netpulse.netpulsefx;
 
 import com.netpulse.netpulsefx.exception.NetworkInterfaceException;
+import com.netpulse.netpulsefx.model.AIConfig;
 import com.netpulse.netpulsefx.model.ProcessTrafficModel;
+import com.netpulse.netpulsefx.model.TrafficData;
+import com.netpulse.netpulsefx.service.AIService;
 import com.netpulse.netpulsefx.service.DatabaseService;
 import com.netpulse.netpulsefx.service.NetworkInterfaceService;
 import com.netpulse.netpulsefx.service.ProcessContextService;
@@ -32,17 +35,31 @@ import javafx.geometry.Insets;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
+import javafx.scene.control.MenuButton;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.event.ActionEvent;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
+import javafx.concurrent.Service;
+import javafx.concurrent.WorkerStateEvent;
 import javafx.scene.chart.LineChart;
 import javafx.scene.chart.XYChart;
 import javafx.stage.Stage;
 import org.pcap4j.core.PcapNetworkInterface;
+import org.pcap4j.core.PcapHandle;
+import org.pcap4j.core.PcapAddress;
+import org.pcap4j.core.BpfProgram.BpfCompileMode;
 
+import java.net.InetAddress;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -70,6 +87,18 @@ public class MainController {
     /** 网卡下拉框：显示所有可用的网络接口 */
     @FXML
     private ComboBox<PcapNetworkInterface> networkInterfaceComboBox;
+    
+    /** BPF 过滤表达式输入框 */
+    @FXML
+    private TextField bpfFilterTextField;
+    
+    /** BPF 预设菜单按钮 */
+    @FXML
+    private MenuButton bpfPresetMenuButton;
+    
+    /** 帮助按钮 */
+    @FXML
+    private Button helpButton;
     
     /** 查看历史数据按钮 */
     @FXML
@@ -157,6 +186,12 @@ public class MainController {
     /** 进程上下文服务：负责识别数据包对应的进程 */
     private ProcessContextService processContextService;
     
+    /** AI 服务对象：负责流量数据的智能分析 */
+    private AIService aiService;
+    
+    /** AI 提供商名称（用于状态显示） */
+    private String aiProviderName;
+    
     /** 存储实际的网卡对象列表，用于后续的监控操作 */
     private List<PcapNetworkInterface> pcapNetworkInterfaces;
     
@@ -185,6 +220,12 @@ public class MainController {
     
     /** 图表数据系列：存储流量数据点 */
     private XYChart.Series<String, Number> trafficSeries;
+    
+    /** 下行速度数据系列 */
+    private XYChart.Series<String, Number> downSpeedSeries;
+    
+    /** 上行速度数据系列 */
+    private XYChart.Series<String, Number> upSpeedSeries;
     
     /** 时间格式化器：用于生成时间标签 */
     private SimpleDateFormat timeFormatter;
@@ -250,6 +291,14 @@ public class MainController {
         processContextService = ProcessContextService.getInstance();
         processContextService.start(); // 启动后台更新任务
         
+        // 初始化 AI 服务
+        initializeAIService();
+        
+        // 设置标题为微软雅黑并加粗
+        if (titleLabel != null) {
+            titleLabel.setStyle("-fx-font-family: 'Microsoft YaHei', '微软雅黑', sans-serif; -fx-font-weight: bold;");
+        }
+        
         // 初始化流量监控相关组件
         initializeTrafficMonitoring();
         
@@ -265,8 +314,113 @@ public class MainController {
         // 初始化状态栏
         initializeStatusBar();
         
+        // 初始化 BPF 过滤输入框
+        initializeBpfFilterInput();
+        
         // 初始化时自动刷新网卡列表
         refreshNICs();
+    }
+    
+    /**
+     * 初始化 BPF 过滤表达式输入框
+     * 设置文本变化监听器，进行异步语法校验
+     */
+    private void initializeBpfFilterInput() {
+        if (bpfFilterTextField == null) {
+            return;
+        }
+        
+        // 添加文本变化监听器，进行异步校验
+        bpfFilterTextField.textProperty().addListener((observable, oldValue, newValue) -> {
+            // 如果输入为空，清除错误状态
+            if (newValue == null || newValue.trim().isEmpty()) {
+                bpfFilterTextField.getStyleClass().remove("error");
+                bpfFilterTextField.setTooltip(null);
+                return;
+            }
+            
+            // 异步校验 BPF 表达式语法
+            validateBpfExpressionAsync(newValue.trim());
+        });
+    }
+    
+    /**
+     * 异步校验 BPF 表达式语法
+     * 使用后台任务进行校验，避免阻塞 UI 线程
+     * 
+     * @param expression BPF 过滤表达式
+     */
+    private void validateBpfExpressionAsync(String expression) {
+        // 创建一个后台任务来校验表达式
+        Task<Boolean> validationTask = new Task<Boolean>() {
+            @Override
+            protected Boolean call() throws Exception {
+                try {
+                    // 使用 Pcap4j 的 BpfProgram 来编译和校验表达式
+                    // 这里我们创建一个临时的 PcapHandle 来测试表达式
+                    // 实际上，我们可以直接使用 BpfProgram.compile() 方法
+                    PcapNetworkInterface testInterface = networkInterfaceComboBox.getValue();
+                    if (testInterface == null) {
+                        // 如果没有选中网卡，使用第一个可用网卡进行测试
+                        List<PcapNetworkInterface> interfaces = networkInterfaceService.getAllInterfaces();
+                        if (interfaces.isEmpty()) {
+                            return false;
+                        }
+                        testInterface = interfaces.get(0);
+                    }
+                    
+                    // 打开一个临时的 PcapHandle 来测试过滤器
+                    try (PcapHandle testHandle = testInterface.openLive(
+                            65536,
+                            PcapNetworkInterface.PromiscuousMode.NONPROMISCUOUS,
+                            10)) {
+                        // 尝试编译并设置过滤器（仅用于校验）
+                        // 注意：此操作在内核空间完成过滤，可大幅降低 JVM 的 GC 压力
+                        testHandle.setFilter(expression, BpfCompileMode.OPTIMIZE);
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // 捕获语法错误（setFilter 可能抛出各种异常，包括语法错误）
+                    updateMessage(e.getMessage());
+                    return false;
+                }
+            }
+        };
+        
+        // 任务完成后的回调
+        validationTask.setOnSucceeded(event -> {
+            boolean isValid = validationTask.getValue();
+            Platform.runLater(() -> {
+                if (isValid) {
+                    // 语法正确，清除错误样式
+                    bpfFilterTextField.getStyleClass().remove("error");
+                    bpfFilterTextField.setTooltip(null);
+                } else {
+                    // 语法错误，显示错误样式和提示
+                    String errorMessage = validationTask.getMessage();
+                    if (errorMessage == null || errorMessage.isEmpty()) {
+                        errorMessage = "BPF 表达式语法错误";
+                    }
+                    bpfFilterTextField.getStyleClass().add("error");
+                    bpfFilterTextField.setTooltip(new Tooltip(errorMessage));
+                }
+            });
+        });
+        
+        validationTask.setOnFailed(event -> {
+            Platform.runLater(() -> {
+                // 校验失败，显示错误样式
+                bpfFilterTextField.getStyleClass().add("error");
+                Throwable exception = validationTask.getException();
+                String errorMessage = exception != null ? exception.getMessage() : "校验失败";
+                bpfFilterTextField.setTooltip(new Tooltip(errorMessage));
+            });
+        });
+        
+        // 在后台线程中执行校验任务
+        Thread validationThread = new Thread(validationTask);
+        validationThread.setDaemon(true);
+        validationThread.start();
     }
     
     /**
@@ -299,9 +453,8 @@ public class MainController {
         // 初始化状态显示
         if (uptimeLabel != null) uptimeLabel.setText("00:00:00");
         if (aiStatusLabel != null) {
-            // 检查 AI 服务是否可用（这里简化处理，实际应该检查 AIService）
-            aiStatusLabel.setText("未连接");
-            aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+            // 检查 AI 服务是否可用
+            checkAIStatus();
         }
         if (dbStatusLabel != null) {
             if (databaseService != null && databaseService.getConnection() != null) {
@@ -328,6 +481,226 @@ public class MainController {
             if (uptimeLabel != null) {
                 uptimeLabel.setText(String.format("%02d:%02d:%02d", hours, minutes, secs));
             }
+        });
+    }
+    
+    /**
+     * 初始化 AI 服务
+     * 从环境变量读取配置并创建 AIService 实例
+     */
+    private void initializeAIService() {
+        try {
+            // 尝试从环境变量读取配置
+            String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
+            String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
+            String apiKey = cleanEnvValue(System.getenv("AI_API_KEY"));
+            String model = cleanEnvValue(System.getenv("AI_MODEL"));
+            
+            // 如果环境变量已设置，使用环境变量配置
+            if (apiEndpoint != null && !apiEndpoint.isEmpty()) {
+                String finalProvider = apiProvider != null && !apiProvider.isEmpty() 
+                    ? apiProvider : "deepseek";
+                String finalModel = model != null && !model.isEmpty() 
+                    ? model : (finalProvider.equalsIgnoreCase("deepseek") ? "deepseek-chat" : "gpt-3.5-turbo");
+                String finalApiKey = apiKey != null ? apiKey : "";
+                
+                aiService = new AIService(new AIConfig(finalProvider, apiEndpoint, finalApiKey, finalModel));
+                aiProviderName = formatProviderName(finalProvider);
+                
+                System.out.println("[MainController] AI 服务已初始化（环境变量配置）");
+            } else {
+                // 环境变量未设置，根据 provider 使用默认配置
+                String finalProvider = (apiProvider != null && !apiProvider.isEmpty()) 
+                    ? apiProvider : "deepseek";
+                
+                if ("deepseek".equalsIgnoreCase(finalProvider)) {
+                    AIConfig config = AIConfig.defaultDeepSeek();
+                    String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                    String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
+                    aiService = new AIService(new AIConfig(
+                        config.getProvider(),
+                        config.getApiEndpoint(),
+                        finalApiKey,
+                        finalModel
+                    ));
+                    aiProviderName = formatProviderName(config.getProvider());
+                } else if ("openai".equalsIgnoreCase(finalProvider)) {
+                    AIConfig config = AIConfig.defaultOpenAI();
+                    String finalApiKey = (apiKey != null && !apiKey.isEmpty()) ? apiKey : "";
+                    String finalModel = (model != null && !model.isEmpty()) ? model : config.getModel();
+                    aiService = new AIService(new AIConfig(
+                        config.getProvider(),
+                        config.getApiEndpoint(),
+                        finalApiKey,
+                        finalModel
+                    ));
+                    aiProviderName = formatProviderName(config.getProvider());
+                } else {
+                    // 默认使用 Ollama（本地）
+                    AIConfig config = AIConfig.defaultOllama();
+                    String finalModel = (model != null && !model.isEmpty()) ? model : "llama2";
+                    aiService = new AIService(new AIConfig(
+                        config.getProvider(),
+                        config.getApiEndpoint(),
+                        config.getApiKey(),
+                        finalModel
+                    ));
+                    aiProviderName = formatProviderName(config.getProvider());
+                }
+                
+                System.out.println("[MainController] AI 服务已初始化（默认配置）");
+            }
+        } catch (Exception e) {
+            System.err.println("[MainController] AI 服务初始化失败: " + e.getMessage());
+            e.printStackTrace();
+            aiService = null;
+        }
+    }
+    
+    /**
+     * 清理环境变量值（去除引号和空白字符）
+     */
+    private String cleanEnvValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        value = value.trim();
+        // 去除首尾的引号（单引号或双引号）
+        if ((value.startsWith("\"") && value.endsWith("\"")) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value.trim();
+    }
+    
+    /**
+     * 格式化提供商名称（用于显示）
+     * 
+     * @param provider 提供商名称（小写）
+     * @return 格式化后的名称（首字母大写）
+     */
+    private String formatProviderName(String provider) {
+        if (provider == null || provider.isEmpty()) {
+            return "未知";
+        }
+        
+        String lower = provider.toLowerCase();
+        if ("deepseek".equals(lower)) {
+            return "DeepSeek";
+        } else if ("openai".equals(lower)) {
+            return "OpenAI";
+        } else if ("ollama".equals(lower)) {
+            return "Ollama";
+        } else {
+            // 首字母大写
+            return provider.substring(0, 1).toUpperCase() + provider.substring(1).toLowerCase();
+        }
+    }
+    
+    /**
+     * 检查 AI 服务状态
+     * 如果 AI 服务已配置，则更新状态标签为"已连接{提供商名称}"
+     */
+    private void checkAIStatus() {
+        if (aiStatusLabel == null) {
+            return;
+        }
+        
+        // 首先检查 AI 服务是否已初始化
+        if (aiService == null) {
+            aiStatusLabel.setText("未连接");
+            aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+            return;
+        }
+        
+        // 获取提供商名称
+        String providerName = aiProviderName;
+        if (providerName == null || providerName.isEmpty()) {
+            // 如果未保存提供商名称，尝试从环境变量获取
+            String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
+            if (apiProvider == null || apiProvider.isEmpty()) {
+                apiProvider = "deepseek";
+            }
+            providerName = formatProviderName(apiProvider);
+        }
+        
+        // 检查环境变量或配置是否存在
+        String apiEndpoint = cleanEnvValue(System.getenv("AI_API_ENDPOINT"));
+        if (apiEndpoint == null || apiEndpoint.isEmpty()) {
+            // 如果没有设置环境变量，检查是否有默认配置（DeepSeek）
+            String apiProvider = cleanEnvValue(System.getenv("AI_PROVIDER"));
+            if (apiProvider == null || apiProvider.isEmpty()) {
+                apiProvider = "deepseek";
+            }
+            // 如果有provider，认为已配置（使用默认端点）
+            if (apiProvider != null && !apiProvider.isEmpty()) {
+                aiStatusLabel.setText("已连接" + providerName);
+                aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
+                // 异步测试连接（不阻塞UI）
+                testAIConnectionAsync(providerName);
+            } else {
+                aiStatusLabel.setText("未配置");
+                aiStatusLabel.setStyle("-fx-text-fill: #6c757d;");
+            }
+        } else {
+            // 环境变量已设置，显示"已连接{提供商名称}"
+            aiStatusLabel.setText("已连接" + providerName);
+            aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
+            // 异步测试连接（不阻塞UI）
+            testAIConnectionAsync(providerName);
+        }
+    }
+    
+    /**
+     * 异步测试 AI 连接
+     * 发送一个简单的测试请求来验证连接是否正常
+     * 
+     * @param providerName 提供商名称（用于状态显示）
+     */
+    private void testAIConnectionAsync(String providerName) {
+        if (aiService == null) {
+            return;
+        }
+        
+        // 在后台线程中测试连接
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                // 创建一个简单的测试请求（使用空数据列表）
+                // 这会触发配置检查，如果配置无效会返回错误信息
+                List<TrafficData> emptyList = new ArrayList<>();
+                CompletableFuture<String> result = aiService.analyzeTraffic(emptyList);
+                
+                // 等待结果（设置超时）
+                String response = result.get(5, TimeUnit.SECONDS);
+                
+                // 如果返回的是错误信息，说明连接可能有问题
+                if (response != null && response.startsWith("错误：")) {
+                    return false;
+                }
+                return true;
+            } catch (Exception e) {
+                // 连接测试失败
+                System.err.println("[MainController] AI 连接测试失败: " + e.getMessage());
+                return false;
+            }
+        }).thenAccept(success -> {
+            Platform.runLater(() -> {
+                if (aiStatusLabel != null) {
+                    if (success) {
+                        // 连接成功，显示"已连接{提供商名称}"
+                        String displayName = providerName != null && !providerName.isEmpty() 
+                            ? providerName : "AI";
+                        aiStatusLabel.setText("已连接" + displayName);
+                        aiStatusLabel.setStyle("-fx-text-fill: #28a745;");
+                    } else {
+                        // 配置存在但连接失败，显示"连接失败{提供商名称}"
+                        String displayName = providerName != null && !providerName.isEmpty() 
+                            ? providerName : "AI";
+                        aiStatusLabel.setText("连接失败" + displayName);
+                        aiStatusLabel.setStyle("-fx-text-fill: #ffc107;");
+                    }
+                }
+            });
         });
     }
     
@@ -398,19 +771,147 @@ public class MainController {
     private void initializeTrafficMonitoring() {
         // 创建图表数据系列
         trafficSeries = new XYChart.Series<>();
-        trafficSeries.setName("网络流量");
+        trafficSeries.setName("总流量");
+        
+        // 创建下行和上行速度数据系列
+        downSpeedSeries = new XYChart.Series<>();
+        downSpeedSeries.setName("下行速度");
+        
+        upSpeedSeries = new XYChart.Series<>();
+        upSpeedSeries.setName("上行速度");
         
         // 将数据系列添加到图表
-        trafficChart.getData().add(trafficSeries);
+        trafficChart.getData().addAll(downSpeedSeries, upSpeedSeries, trafficSeries);
         
         // 初始化时间格式化器（格式：HH:mm:ss）
         timeFormatter = new SimpleDateFormat("HH:mm:ss");
+        
+        // 设置图表样式类（用于CSS面积填充）
+        trafficChart.getStyleClass().add("area-chart");
+        
+        // 为所有数据点添加Tooltip（鼠标悬停显示精确数值）
+        addTooltipsToChartData();
         
         // 创建定时任务执行器（单线程）
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "TrafficUpdateThread");
             t.setDaemon(true); // 设置为守护线程
             return t;
+        });
+    }
+    
+    /**
+     * 为图表数据点添加 Tooltip 交互功能
+     * 遍历所有数据序列（下行速度、上行速度、总流量），为每个数据点安装 Tooltip
+     * 
+     * 调用时机：
+     * 1. 在 initializeTrafficMonitoring() 中初始化时调用
+     * 2. 每次向图表添加新数据点后，会自动通过监听器触发
+     */
+    private void addTooltipsToChartData() {
+        // 为下行速度序列添加监听器
+        downSpeedSeries.getData().addListener((javafx.collections.ListChangeListener.Change<? extends XYChart.Data<String, Number>> change) -> {
+            while (change.next()) {
+                if (change.wasAdded()) {
+                    for (XYChart.Data<String, Number> data : change.getAddedSubList()) {
+                        installTooltipForDataPoint(data, "下行速度", true);
+                    }
+                }
+            }
+        });
+        
+        // 为上行速度序列添加监听器
+        upSpeedSeries.getData().addListener((javafx.collections.ListChangeListener.Change<? extends XYChart.Data<String, Number>> change) -> {
+            while (change.next()) {
+                if (change.wasAdded()) {
+                    for (XYChart.Data<String, Number> data : change.getAddedSubList()) {
+                        installTooltipForDataPoint(data, "上行速度", false);
+                    }
+                }
+            }
+        });
+        
+        // 为总流量序列添加监听器
+        trafficSeries.getData().addListener((javafx.collections.ListChangeListener.Change<? extends XYChart.Data<String, Number>> change) -> {
+            while (change.next()) {
+                if (change.wasAdded()) {
+                    for (XYChart.Data<String, Number> data : change.getAddedSubList()) {
+                        installTooltipForDataPoint(data, "总流量", null);
+                    }
+                }
+            }
+        });
+    }
+    
+    /**
+     * 为单个数据点安装 Tooltip
+     * 
+     * @param data 数据点对象
+     * @param seriesName 序列名称（用于显示）
+     * @param isDownSpeed 是否为下行速度（true=下行，false=上行，null=总流量）
+     */
+    private void installTooltipForDataPoint(XYChart.Data<String, Number> data, String seriesName, Boolean isDownSpeed) {
+        // 创建 Tooltip 实例
+        Tooltip tooltip = new Tooltip();
+        
+        // 获取数据值
+        String time = data.getXValue();
+        double speed = data.getYValue().doubleValue();
+        
+        // 根据序列类型设置 Tooltip 文本
+        String tooltipText;
+        if (isDownSpeed == null) {
+            // 总流量：显示总流量、下行和上行（平均分配）
+            double downSpeed = speed / 2.0;
+            double upSpeed = speed / 2.0;
+            tooltipText = String.format(
+                "时间：%s\n" +
+                "总流量：%.2f KB/s\n" +
+                "下行：%.2f KB/s\n" +
+                "上行：%.2f KB/s",
+                time, speed, downSpeed, upSpeed
+            );
+        } else if (isDownSpeed) {
+            // 下行速度
+            tooltipText = String.format(
+                "时间：%s\n" +
+                "下行速度：%.2f KB/s",
+                time, speed
+            );
+        } else {
+            // 上行速度
+            tooltipText = String.format(
+                "时间：%s\n" +
+                "上行速度：%.2f KB/s",
+                time, speed
+            );
+        }
+        
+        tooltip.setText(tooltipText);
+        
+        // 设置 Tooltip 样式
+        tooltip.setStyle(
+            "-fx-font-size: 13px; " +
+            "-fx-font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif; " +
+            "-fx-background-color: rgba(44,62,80,0.95); " +
+            "-fx-text-fill: white; " +
+            "-fx-padding: 10px 14px; " +
+            "-fx-background-radius: 6px; " +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 8, 0, 0, 2);"
+        );
+        
+        // 将 Tooltip 安装到数据点的节点上
+        Platform.runLater(() -> {
+            if (data.getNode() != null) {
+                Tooltip.install(data.getNode(), tooltip);
+            } else {
+                // 如果节点还未创建，等待节点创建后再安装
+                data.nodeProperty().addListener((obs, oldNode, newNode) -> {
+                    if (newNode != null) {
+                        Tooltip.install(newNode, tooltip);
+                    }
+                });
+            }
         });
     }
     
@@ -439,6 +940,12 @@ public class MainController {
         
         // 设置上传速度列的格式化显示（带进度条）
         processUploadSpeedColumn.setCellFactory(column -> new ProgressBarTableCell(false));
+        
+        // 设置列对齐：进程名称左对齐，其他列右对齐
+        processNameColumn.setStyle("-fx-alignment: CENTER-LEFT;");
+        processPidColumn.setStyle("-fx-alignment: CENTER-RIGHT;");
+        processDownloadSpeedColumn.setStyle("-fx-alignment: CENTER-RIGHT;");
+        processUploadSpeedColumn.setStyle("-fx-alignment: CENTER-RIGHT;");
         
         // 设置进程名称列的背景颜色（整行）
         processNameColumn.setCellFactory(column -> new TableCell<ProcessTrafficModel, String>() {
@@ -476,6 +983,41 @@ public class MainController {
     }
     
     // ========== 事件处理方法 ==========
+    
+    /**
+     * 帮助按钮的点击事件处理
+     * 打开帮助中心窗口（非模态窗口）
+     */
+    @FXML
+    protected void onHelpButtonClick() {
+        try {
+            // 加载帮助中心窗口的 FXML 文件
+            FXMLLoader fxmlLoader = new FXMLLoader(
+                HelloApplication.class.getResource("help-view.fxml")
+            );
+            
+            // 创建新窗口
+            Stage helpStage = new Stage();
+            helpStage.setTitle("帮助中心 - NetPulse FX");
+            helpStage.setScene(new Scene(fxmlLoader.load(), 1000, 700));
+            
+            // 设置窗口为非模态窗口（允许同时操作主窗口）
+            // helpStage.initModality(Modality.NONE); // 默认就是非模态，可省略
+            
+            // 设置窗口最小尺寸
+            helpStage.setMinWidth(800);
+            helpStage.setMinHeight(500);
+            
+            // 显示窗口
+            helpStage.show();
+            
+        } catch (Exception e) {
+            // 如果打开窗口失败，显示错误提示
+            showAlert(Alert.AlertType.ERROR, "打开帮助中心失败", 
+                    "无法打开帮助中心窗口：\n" + e.getMessage());
+            e.printStackTrace();
+        }
+    }
     
     /**
      * 查看历史数据按钮的点击事件处理
@@ -574,7 +1116,14 @@ public class MainController {
             
             try {
                 // 保存当前监控的网卡名称（用于数据库记录）
-                currentMonitoringInterfaceName = selectedInterface.getName();
+                // 优先使用描述（用户友好的名称），如果描述为空则使用设备名称
+                String description = selectedInterface.getDescription();
+                if (description != null && !description.trim().isEmpty()) {
+                    currentMonitoringInterfaceName = description;
+                } else {
+                    // 如果描述为空，使用设备名称作为后备
+                    currentMonitoringInterfaceName = selectedInterface.getName();
+                }
                 
                 // 创建新的监控会话
                 databaseService.startNewSession(currentMonitoringInterfaceName)
@@ -582,11 +1131,43 @@ public class MainController {
                         currentSessionId = sessionId;
                         System.out.println("[MainController] 监控会话已创建: session_id=" + sessionId);
                         
-                        // 清空图表数据
-                        Platform.runLater(() -> trafficSeries.getData().clear());
+                        // 清空图表数据（清空所有序列）
+                        Platform.runLater(() -> {
+                            downSpeedSeries.getData().clear();
+                            upSpeedSeries.getData().clear();
+                            trafficSeries.getData().clear();
+                        });
                         
-                        // 创建流量监控任务
-                        trafficMonitorTask = new TrafficMonitorTask(selectedInterface);
+                        // 获取 BPF 过滤表达式（如果为空则传递 null）
+                        String bpfExpression = null;
+                        if (bpfFilterTextField != null) {
+                            String text = bpfFilterTextField.getText();
+                            if (text != null && !text.trim().isEmpty()) {
+                                bpfExpression = text.trim();
+                            }
+                        }
+                        
+                        // 检查 BPF 表达式是否有错误样式（表示语法错误）
+                        if (bpfExpression != null && bpfFilterTextField.getStyleClass().contains("error")) {
+                            Platform.runLater(() -> {
+                                showAlert(Alert.AlertType.WARNING, "BPF 表达式错误", 
+                                        "BPF 过滤表达式存在语法错误，请修正后再开始监控！");
+                                resetMonitorButtons();
+                            });
+                            return;
+                        }
+                        
+                        // 获取本地 IP 地址（用于区分上行和下行流量）
+                        String localIp = networkInterfaceService.getValidIPv4Address(selectedInterface);
+                        if (localIp == null || localIp.isEmpty()) {
+                            // 如果无法获取本地 IP，显示警告但继续监控（会使用平均分配的方式）
+                            System.out.println("[MainController] 警告：无法获取本地 IP 地址，将使用平均分配方式统计流量");
+                        } else {
+                            System.out.println("[MainController] 本地 IP 地址: " + localIp);
+                        }
+                        
+                        // 创建流量监控任务（传入 BPF 表达式和本地 IP 地址）
+                        trafficMonitorTask = new TrafficMonitorTask(selectedInterface, bpfExpression, localIp);
                         
                         // 设置任务失败时的回调
                         trafficMonitorTask.setOnFailed(e -> {
@@ -629,6 +1210,12 @@ public class MainController {
                             stopMonitorButton.setDisable(false);
                             refreshNICButton.setDisable(true);
                             networkInterfaceComboBox.setDisable(true);
+                            if (bpfFilterTextField != null) {
+                                bpfFilterTextField.setDisable(true);
+                            }
+                            if (bpfPresetMenuButton != null) {
+                                bpfPresetMenuButton.setDisable(true);
+                            }
                             
                             titleLabel.setText("正在监控：" + selectedInterface.getDescription());
                         });
@@ -657,6 +1244,141 @@ public class MainController {
     @FXML
     protected void onStopMonitorButtonClick() {
         stopMonitoring();
+    }
+    
+    // ========== BPF 预设菜单事件处理方法 ==========
+    
+    /**
+     * BPF 预设：仅限 Web 流量
+     * 过滤表达式：tcp port 80 or port 443
+     */
+    @FXML
+    protected void onBpfPresetWebTraffic() {
+        applyBpfPreset("tcp port 80 or port 443");
+    }
+    
+    /**
+     * BPF 预设：排除本机会话
+     * 过滤表达式：not host [本地IP]
+     */
+    @FXML
+    protected void onBpfPresetExcludeLocal() {
+        String localIp = getLocalIpAddress();
+        if (localIp != null && !localIp.isEmpty()) {
+            applyBpfPreset("not host " + localIp);
+        } else {
+            showAlert(Alert.AlertType.WARNING, "无法获取本地IP", 
+                    "无法获取本地IP地址，请手动输入排除本机会话的过滤表达式。");
+        }
+    }
+    
+    /**
+     * BPF 预设：DNS 监控
+     * 过滤表达式：udp port 53
+     */
+    @FXML
+    protected void onBpfPresetDns() {
+        applyBpfPreset("udp port 53");
+    }
+    
+    /**
+     * BPF 预设：大包屏蔽（只抓小控制包）
+     * 过滤表达式：less 128
+     */
+    @FXML
+    protected void onBpfPresetSmallPackets() {
+        applyBpfPreset("less 128");
+    }
+    
+    /**
+     * 应用 BPF 预设表达式
+     * 将表达式填充到输入框并立即触发语法验证
+     * 
+     * @param expression BPF 过滤表达式
+     */
+    private void applyBpfPreset(String expression) {
+        if (bpfFilterTextField == null) {
+            return;
+        }
+        
+        // 填充表达式到输入框
+        bpfFilterTextField.setText(expression);
+        
+        // 触发语法验证（通过模拟文本变化事件）
+        // 由于我们已经设置了 textProperty 监听器，直接设置文本会自动触发验证
+        // 但为了确保验证立即执行，我们可以手动调用验证方法
+        if (expression != null && !expression.trim().isEmpty()) {
+            validateBpfExpressionAsync(expression.trim());
+        }
+    }
+    
+    /**
+     * 获取本地IP地址
+     * 优先使用当前选中的网卡IP，如果没有选中则使用第一个可用网卡的IP
+     * 
+     * @return 本地IP地址字符串，如果无法获取则返回 null
+     */
+    private String getLocalIpAddress() {
+        try {
+            // 优先使用当前选中的网卡
+            PcapNetworkInterface selectedInterface = networkInterfaceComboBox.getValue();
+            if (selectedInterface != null) {
+                String ip = getIpFromInterface(selectedInterface);
+                if (ip != null && !ip.isEmpty()) {
+                    return ip;
+                }
+            }
+            
+            // 如果没有选中网卡或选中的网卡没有IP，尝试获取第一个可用网卡的IP
+            List<PcapNetworkInterface> interfaces = networkInterfaceService.getAllInterfaces();
+            for (PcapNetworkInterface nif : interfaces) {
+                String ip = getIpFromInterface(nif);
+                if (ip != null && !ip.isEmpty()) {
+                    // 排除回环地址
+                    if (!ip.equals("127.0.0.1") && !ip.startsWith("127.")) {
+                        return ip;
+                    }
+                }
+            }
+            
+            // 如果所有网卡都没有有效IP，返回 null
+            return null;
+        } catch (Exception e) {
+            System.err.println("[MainController] 获取本地IP地址失败: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * 从网络接口获取IP地址
+     * 
+     * @param nif 网络接口对象
+     * @return IP地址字符串，如果无法获取则返回 null
+     */
+    private String getIpFromInterface(PcapNetworkInterface nif) {
+        if (nif == null) {
+            return null;
+        }
+        
+        try {
+            List<PcapAddress> addresses = nif.getAddresses();
+            if (addresses != null && !addresses.isEmpty()) {
+                for (PcapAddress addr : addresses) {
+                    InetAddress inetAddr = addr.getAddress();
+                    if (inetAddr != null) {
+                        String ip = inetAddr.getHostAddress();
+                        // 排除 IPv6 地址（以冒号分隔）
+                        if (ip != null && !ip.contains(":") && !ip.equals("127.0.0.1")) {
+                            return ip;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[MainController] 从网络接口获取IP失败: " + e.getMessage());
+        }
+        
+        return null;
     }
     
     /**
@@ -742,6 +1464,12 @@ public class MainController {
         stopMonitorButton.setDisable(true);
         refreshNICButton.setDisable(false);
         networkInterfaceComboBox.setDisable(false);
+        if (bpfFilterTextField != null) {
+            bpfFilterTextField.setDisable(false);
+        }
+        if (bpfPresetMenuButton != null) {
+            bpfPresetMenuButton.setDisable(false);
+        }
         titleLabel.setText("请选择监控网卡");
         currentMonitoringInterfaceName = null; // 清除当前监控的网卡名称
         currentSessionId = null; // 清除当前会话ID
@@ -782,20 +1510,18 @@ public class MainController {
         }
         
         try {
-            // 读取累计的字节数并清零（原子操作）
-            long bytes = trafficMonitorTask.getAndResetBytes();
+            // 读取累计的上行和下行字节数并清零（原子操作）
+            long[] bytes = trafficMonitorTask.getAndResetBytes();
+            long uploadedBytes = bytes[0];  // 上行字节数
+            long downloadedBytes = bytes[1]; // 下行字节数
             
             // 转换为 KB/s（因为每秒执行一次，所以直接除以1024即可）
-            double kbPerSecond = bytes / 1024.0;
+            double uploadKbPerSecond = uploadedBytes / 1024.0;   // 上行速度（KB/s）
+            double downloadKbPerSecond = downloadedBytes / 1024.0; // 下行速度（KB/s）
+            double totalKbPerSecond = uploadKbPerSecond + downloadKbPerSecond; // 总速度（KB/s）
             
             // 生成当前时间标签
             String timeLabel = timeFormatter.format(new Date());
-            
-            // 异步保存流量数据到数据库
-            // 注意：这里假设 down_speed 和 up_speed 都使用相同的值
-            // 如果需要区分上行和下行，需要在 TrafficMonitorTask 中分别统计
-            // 由于当前的 TrafficMonitorTask 只统计总流量，这里将下行和上行都设置为相同值
-            // 未来可以根据需要扩展 TrafficMonitorTask 来区分方向
             
             // 获取最近捕获的IP地址信息
             String[] lastIps = trafficMonitorTask.getAndClearLastIps();
@@ -805,22 +1531,26 @@ public class MainController {
             // 获取进程名称（用于数据库记录）
             String processName = trafficMonitorTask.getAndClearLastProcessName();
             
-            // 获取进程流量统计（从 TrafficMonitorTask 中获取所有进程的累计流量）
-            Map<String, Long> processTrafficMap = trafficMonitorTask.getAndClearProcessTraffic();
+            // 获取进程流量统计（从 TrafficMonitorTask 中获取所有进程的累计流量，已区分上下行）
+            Map<String, TrafficMonitorTask.ProcessTrafficStats> processTrafficMap = 
+                trafficMonitorTask.getAndClearProcessTraffic();
             
             // 汇总进程流量（用于进程流量表格）
             synchronized (processTrafficLock) {
-                for (Map.Entry<String, Long> entry : processTrafficMap.entrySet()) {
+                for (Map.Entry<String, TrafficMonitorTask.ProcessTrafficStats> entry : processTrafficMap.entrySet()) {
                     String procName = entry.getKey();
-                    long processBytes = entry.getValue(); // 使用不同的变量名避免冲突
-                    double processKbPerSecond = processBytes / 1024.0; // 转换为 KB/s
+                    TrafficMonitorTask.ProcessTrafficStats stats = entry.getValue();
+                    
+                    // 转换为 KB/s（因为每秒执行一次，所以直接除以1024即可）
+                    double processUploadKbPerSecond = stats.getUploadBytes() / 1024.0;   // 进程上行速度（KB/s）
+                    double processDownloadKbPerSecond = stats.getDownloadBytes() / 1024.0; // 进程下行速度（KB/s）
                     
                     ProcessTrafficData tempData = processTrafficTempMap.computeIfAbsent(
                         procName, 
                         k -> new ProcessTrafficData(procName, 0, 0.0, 0.0)
                     );
-                    // 累加流量（这里简化处理，将总流量平均分配给上下行）
-                    tempData.addTraffic(processKbPerSecond / 2.0, processKbPerSecond / 2.0);
+                    // 累加流量（已区分上下行）
+                    tempData.addTraffic(processDownloadKbPerSecond, processUploadKbPerSecond);
                 }
             }
             
@@ -834,13 +1564,26 @@ public class MainController {
             
             // 保存明细记录到当前会话
             if (currentSessionId != null && databaseService != null) {
+                // 获取协议类型
+                String protocol = trafficMonitorTask.getAndClearLastProtocol();
+                
+                // 调试输出
+                if (protocol == null || protocol.isEmpty()) {
+                    System.out.println("[MainController] 警告：协议类型为空，使用默认值'其他'");
+                    protocol = "其他";
+                } else {
+                    System.out.println("[MainController] 保存记录 - 协议: " + protocol + 
+                        ", 下行: " + downloadKbPerSecond + " KB/s, 上行: " + uploadKbPerSecond + " KB/s");
+                }
+                
                 databaseService.saveDetailRecord(
                         currentSessionId,
-                        kbPerSecond,  // 下行速度（当前为总流量）
-                        kbPerSecond,  // 上行速度（当前为总流量，未来可扩展为分别统计）
-                        sourceIp,     // 源IP地址
-                        destIp,       // 目标IP地址
-                        processName   // 进程名称
+                        downloadKbPerSecond,  // 下行速度（KB/s）
+                        uploadKbPerSecond,     // 上行速度（KB/s）
+                        sourceIp,             // 源IP地址
+                        destIp,               // 目标IP地址
+                        processName,          // 进程名称
+                        protocol              // 协议类型
                 ).exceptionally(e -> {
                     // 数据库保存失败时，只记录错误，不影响 UI 显示
                     System.err.println("[MainController] 保存流量明细记录失败: " + e.getMessage());
@@ -849,16 +1592,16 @@ public class MainController {
             }
             
             // 更新概览看板数据
-            double downSpeed = kbPerSecond / 2.0;  // 简化处理：平均分配
-            double upSpeed = kbPerSecond / 2.0;
+            double downSpeed = downloadKbPerSecond;  // 下行速度
+            double upSpeed = uploadKbPerSecond;     // 上行速度
             
-            // 更新峰值速度
-            if (kbPerSecond > peakSpeed) {
-                peakSpeed = kbPerSecond;
+            // 更新峰值速度（使用总速度）
+            if (totalKbPerSecond > peakSpeed) {
+                peakSpeed = totalKbPerSecond;
             }
             
             // 更新总流量（累加）
-            totalTrafficMB += kbPerSecond / 1024.0;  // KB/s 转换为 MB
+            totalTrafficMB += totalKbPerSecond / 1024.0;  // KB/s 转换为 MB
             
             // 使用 Platform.runLater() 确保 UI 更新在主线程执行
             Platform.runLater(() -> {
@@ -876,13 +1619,30 @@ public class MainController {
                     totalTrafficLabel.setText(String.format("%.2f", totalTrafficMB));
                 }
                 
-                // 添加新的数据点
-                trafficSeries.getData().add(new XYChart.Data<>(timeLabel, kbPerSecond));
+                // 添加新的数据点到三个序列
+                // 下行速度数据点
+                XYChart.Data<String, Number> downData = new XYChart.Data<>(timeLabel, downSpeed);
+                downSpeedSeries.getData().add(downData);
+                
+                // 上行速度数据点
+                XYChart.Data<String, Number> upData = new XYChart.Data<>(timeLabel, upSpeed);
+                upSpeedSeries.getData().add(upData);
+                
+                // 总流量数据点
+                XYChart.Data<String, Number> totalData = new XYChart.Data<>(timeLabel, totalKbPerSecond);
+                trafficSeries.getData().add(totalData);
+                
+                // Tooltip 会通过监听器自动安装，无需手动安装
                 
                 // 性能优化：限制数据点数量，只保留最近60个点
                 // 这样可以防止图表数据点过多导致卡顿
+                if (downSpeedSeries.getData().size() > MAX_DATA_POINTS) {
+                    downSpeedSeries.getData().remove(0);
+                }
+                if (upSpeedSeries.getData().size() > MAX_DATA_POINTS) {
+                    upSpeedSeries.getData().remove(0);
+                }
                 if (trafficSeries.getData().size() > MAX_DATA_POINTS) {
-                    // 移除最旧的数据点（第一个）
                     trafficSeries.getData().remove(0);
                 }
             });
@@ -1144,6 +1904,7 @@ public class MainController {
     /**
      * 带进度条的表格单元格
      * 用于显示流量数值，背景显示进度条效果
+     * 根据流量占总带宽的比例动态切换颜色（绿/黄/红）
      */
     private class ProgressBarTableCell extends TableCell<ProcessTrafficModel, Double> {
         private final StackPane stackPane;
@@ -1156,21 +1917,24 @@ public class MainController {
             
             // 创建进度条背景
             progressBar = new Region();
-            progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff9800, #ffb74d); " +
-                                "-fx-background-radius: 3px;");
+            progressBar.setStyle("-fx-background-color: linear-gradient(to right, #27AE60, #2ECC71); " +
+                                "-fx-background-radius: 4px;");
             progressBar.setMaxHeight(Double.MAX_VALUE);
             progressBar.setMaxWidth(Double.MAX_VALUE);
             
             // 创建数值标签
             valueLabel = new Label();
-            valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #333333; -fx-font-weight: 500;");
-            valueLabel.setAlignment(Pos.CENTER_LEFT);
+            valueLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #2C3E50; -fx-font-weight: 600;");
+            valueLabel.setAlignment(Pos.CENTER_RIGHT);
             
             // 创建堆叠面板
             stackPane = new StackPane();
-            stackPane.setAlignment(Pos.CENTER_LEFT);
-            stackPane.setPadding(new Insets(4, 8, 4, 8));
+            stackPane.setAlignment(Pos.CENTER_RIGHT);
+            stackPane.setPadding(new Insets(6, 12, 6, 12));
             stackPane.getChildren().addAll(progressBar, valueLabel);
+            
+            // 添加样式类用于CSS控制
+            stackPane.getStyleClass().add("progress-bar-cell");
         }
         
         @Override
@@ -1180,6 +1944,7 @@ public class MainController {
             if (empty || item == null) {
                 setGraphic(null);
                 setText(null);
+                stackPane.getStyleClass().removeAll("low-traffic", "medium-traffic", "high-traffic");
             } else {
                 ProcessTrafficModel model = getTableView().getItems().get(getIndex());
                 if (model == null) {
@@ -1200,23 +1965,36 @@ public class MainController {
                 // 设置进度条宽度
                 progressBar.prefWidthProperty().bind(stackPane.widthProperty().multiply(progress));
                 
-                // 设置文本
+                // 设置文本（右对齐）
                 valueLabel.setText(isDownload ? model.getFormattedDownloadSpeed() : model.getFormattedUploadSpeed());
                 
-                // 根据流量大小调整进度条颜色
-                if (totalSpeed > HIGH_TRAFFIC_THRESHOLD) {
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff5722, #ff8a65); " +
-                                        "-fx-background-radius: 3px;");
-                } else if (totalSpeed > HIGH_TRAFFIC_THRESHOLD / 2) {
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ff9800, #ffb74d); " +
-                                        "-fx-background-radius: 3px;");
+                // 根据流量占总带宽的比例动态切换颜色
+                // 移除旧的样式类
+                stackPane.getStyleClass().removeAll("low-traffic", "medium-traffic", "high-traffic");
+                
+                // 计算流量占比（基于总速度）
+                double bandwidthRatio = totalSpeed / maxSpeed;
+                
+                if (bandwidthRatio > 0.7) {
+                    // 高流量（>70%）- 红色
+                    stackPane.getStyleClass().add("high-traffic");
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #E74C3C, #EC7063); " +
+                                        "-fx-background-radius: 4px;");
+                } else if (bandwidthRatio > 0.3) {
+                    // 中等流量（30%-70%）- 黄色
+                    stackPane.getStyleClass().add("medium-traffic");
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #F39C12, #F1C40F); " +
+                                        "-fx-background-radius: 4px;");
                 } else {
-                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #ffcc80, #ffe0b2); " +
-                                        "-fx-background-radius: 3px;");
+                    // 低流量（<30%）- 绿色
+                    stackPane.getStyleClass().add("low-traffic");
+                    progressBar.setStyle("-fx-background-color: linear-gradient(to right, #27AE60, #2ECC71); " +
+                                        "-fx-background-radius: 4px;");
                 }
                 
                 setGraphic(stackPane);
                 setText(null);
+                setAlignment(Pos.CENTER_RIGHT);
             }
         }
     }

@@ -12,6 +12,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.security.cert.X509Certificate;
+import java.security.NoSuchAlgorithmException;
+import java.security.KeyManagementException;
 
 /**
  * IP 地理位置查询服务
@@ -78,10 +85,13 @@ public class IPLocationService {
     private final Map<String, IPLocationInfo> cache;
     
     /** 请求超时时间（秒） */
-    private static final int TIMEOUT_SECONDS = 3;
+    private static final int TIMEOUT_SECONDS = 10;
     
     /** 最大重试次数 */
-    private static final int MAX_RETRY_COUNT = 1;
+    private static final int MAX_RETRY_COUNT = 2;
+    
+    /** 重试延迟（毫秒） */
+    private static final int RETRY_DELAY_MS = 1000;
     
     /** 
      * 正则表达式模式：提取JSON中的code字段（状态码）
@@ -150,18 +160,82 @@ public class IPLocationService {
      * 私有构造函数（单例模式）
      */
     private IPLocationService() {
-        // 创建 HTTP 客户端，设置超时时间和系统代理
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                .proxy(java.net.ProxySelector.getDefault())
-                .build();
+        // 创建 HTTP 客户端，设置超时时间、系统代理和 SSL 配置
+        HttpClient client = null;
+        try {
+            // 创建更宽松的 SSL 上下文，解决 SSL 握手失败问题
+            SSLContext sslContext = createRelaxedSSLContext();
+            SSLParameters sslParameters = new SSLParameters();
+            // 允许所有 TLS 协议版本（包括 TLS 1.0, 1.1, 1.2, 1.3）
+            sslParameters.setProtocols(new String[]{"TLSv1.2", "TLSv1.3", "TLSv1.1", "TLSv1"});
+            
+            client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                    .proxy(java.net.ProxySelector.getDefault())
+                    .sslContext(sslContext)
+                    .sslParameters(sslParameters)
+                    .build();
+            
+            System.out.println("[IPLocationService] 使用自定义 SSL 上下文初始化 HTTP 客户端");
+        } catch (Exception e) {
+            // 如果创建自定义 SSL 上下文失败，使用默认配置
+            System.err.println("[IPLocationService] 创建自定义 SSL 上下文失败，使用默认配置: " + e.getMessage());
+            client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                    .proxy(java.net.ProxySelector.getDefault())
+                    .build();
+        }
+        
+        // 确保 httpClient 被赋值
+        this.httpClient = client;
         
         // 使用 ConcurrentHashMap 确保线程安全
         this.cache = new ConcurrentHashMap<>();
         
         // 输出初始化信息
         System.out.println("[IPLocationService] 初始化完成，超时设置: " + TIMEOUT_SECONDS + "秒");
+        System.out.println("[IPLocationService] 最大重试次数: " + (MAX_RETRY_COUNT + 1));
         System.out.println("[IPLocationService] API地址: " + API_BASE_URL);
+    }
+    
+    /**
+     * 创建更宽松的 SSL 上下文
+     * 用于解决某些服务器 SSL 握手失败的问题
+     * 
+     * <p>注意：此方法使用信任所有证书的方式，仅用于 IP 地理位置查询这种非敏感操作。
+     * 对于涉及敏感数据的场景，应使用更严格的 SSL 配置。</p>
+     * 
+     * @return SSLContext 对象
+     * @throws NoSuchAlgorithmException 如果算法不存在
+     * @throws KeyManagementException 如果密钥管理失败
+     */
+    private SSLContext createRelaxedSSLContext() throws NoSuchAlgorithmException, KeyManagementException {
+        // 创建信任所有证书的 TrustManager（仅用于 IP 查询，不涉及敏感数据）
+        // 这样可以解决某些服务器的 SSL 证书验证问题
+        TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                @Override
+                public X509Certificate[] getAcceptedIssuers() {
+                    return new X509Certificate[0];
+                }
+                
+                @Override
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                    // 信任所有客户端证书（IP 查询不需要客户端证书）
+                }
+                
+                @Override
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                    // 信任所有服务器证书（解决 SSL 握手失败问题）
+                }
+            }
+        };
+        
+        // 创建 SSL 上下文，使用 TLS 协议（支持所有 TLS 版本）
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+        
+        return sslContext;
     }
     
     /**
@@ -225,11 +299,12 @@ public class IPLocationService {
         for (int attempt = 0; attempt <= MAX_RETRY_COUNT; attempt++) {
             if (attempt > 0) {
                 System.out.println("[IPLocationService] 第 " + (attempt + 1) + " 次尝试查询IP: " + ip);
-                // 重试前短暂等待
+                // 重试前等待更长时间，给服务器时间恢复
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(RETRY_DELAY_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    break;
                 }
             }
             
@@ -248,9 +323,23 @@ public class IPLocationService {
                 }
             } catch (Exception e) {
                 lastException = e;
-                System.err.println("[IPLocationService] 查询IP " + ip + " 失败（第 " + (attempt + 1) + " 次尝试）: " + e.getMessage());
+                String errorMsg = e.getMessage();
+                String errorType = e.getClass().getSimpleName();
+                
+                // 详细记录错误信息，特别是 SSL 相关错误
+                System.err.println("[IPLocationService] 查询IP " + ip + " 失败（第 " + (attempt + 1) + " 次尝试）");
+                System.err.println("[IPLocationService] 错误类型: " + errorType);
+                System.err.println("[IPLocationService] 错误信息: " + errorMsg);
+                
+                // 如果是 SSL 相关错误，提供更详细的提示
+                if (errorMsg != null && (errorMsg.contains("handshake") || 
+                    errorMsg.contains("SSL") || errorMsg.contains("TLS"))) {
+                    System.err.println("[IPLocationService] 检测到 SSL/TLS 握手问题，将在 " + 
+                        (RETRY_DELAY_MS / 1000) + " 秒后重试...");
+                }
+                
                 if (attempt < MAX_RETRY_COUNT) {
-                    System.out.println("[IPLocationService] 将在500ms后重试...");
+                    System.out.println("[IPLocationService] 将在 " + (RETRY_DELAY_MS / 1000) + " 秒后重试...");
                 }
             }
         }

@@ -11,11 +11,18 @@
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
 <?import javafx.scene.control.ProgressIndicator?>
+<?import javafx.scene.control.TitledPane?>
+<?import javafx.scene.control.CheckBox?>
+<?import javafx.scene.control.ComboBox?>
+<?import javafx.scene.control.Slider?>
+<?import javafx.scene.control.Label?>
 <?import javafx.scene.web.WebView?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 <?import javafx.scene.layout.GridPane?>
 <?import javafx.scene.layout.ColumnConstraints?>
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.layout.Region?>
 
 <!--
     历史数据查看窗口布局文件
@@ -223,8 +230,8 @@
         <Tab text="详细记录" closable="false">
             <!-- 使用 SplitPane 分割主表格和侧边栏 -->
             <SplitPane dividerPositions="0.7" VBox.vgrow="ALWAYS">
-        <!-- 左侧：历史数据表格 -->
-        <TableView fx:id="historyTable" VBox.vgrow="ALWAYS">
+                <!-- 左侧：历史数据表格 -->
+                <TableView fx:id="historyTable" VBox.vgrow="ALWAYS">
             <!-- 设置表格列 -->
             <columns>
                 <!-- ID 列 -->
@@ -245,43 +252,185 @@
             <!-- 进程名称列 -->
             <TableColumn fx:id="processNameColumn" text="进程名称" prefWidth="200.0" />
             
+            <!-- 协议列 -->
+            <TableColumn fx:id="protocolColumn" text="协议" prefWidth="80.0" />
+            
             <!-- 捕获时间列 -->
             <TableColumn fx:id="captureTimeColumn" text="捕获时间" prefWidth="200.0" />
             </columns>
         </TableView>
         
-        <!-- 右侧：IP 归属地查询侧边栏 -->
-        <VBox spacing="10.0" style="-fx-padding: 15px;">
-            <Label text="IP 归属地查询" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
-            
-            <!-- IP 输入区域 -->
-            <VBox spacing="5.0">
-                <Label text="输入 IP 地址：" style="-fx-font-size: 12px;"/>
-                <HBox spacing="5.0">
-                    <TextField fx:id="ipInputField" promptText="例如: 8.8.8.8" 
-                               style="-fx-pref-width: 200px;"/>
-                    <Button fx:id="queryIpButton" text="查询" 
-                            onAction="#onQueryIpButtonClick"
-                            style="-fx-pref-width: 80px;"/>
-                </HBox>
+        <!-- 右侧：记录详情和过滤条件 -->
+        <SplitPane orientation="VERTICAL" dividerPositions="0.5" VBox.vgrow="ALWAYS">
+            <!-- 上半部分：记录详情 -->
+            <VBox spacing="15.0" styleClass="detail-container" VBox.vgrow="ALWAYS">
+                <Label text="记录详情" styleClass="detail-title"/>
+                
+                <!-- 数据卡片区域 -->
+                <VBox fx:id="recordDetailContainer" spacing="10.0" VBox.vgrow="NEVER">
+                    <!-- 基本信息卡片网格 -->
+                    <GridPane fx:id="recordInfoGrid" styleClass="data-card-grid" hgap="10.0" vgap="10.0">
+                        <columnConstraints>
+                            <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                            <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                        </columnConstraints>
+                        
+                        <!-- 记录ID卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                            <Label text="记录ID" styleClass="data-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="recordIdLabel" text="--" styleClass="data-card-value"/>
+                            </HBox>
+                        </VBox>
+                        
+                        <!-- 捕获时间卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                            <Label text="捕获时间" styleClass="data-card-title"/>
+                            <Label fx:id="recordCaptureTimeLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                        </VBox>
+                        
+                        <!-- 协议类型卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="1">
+                            <Label text="协议类型" styleClass="data-card-title"/>
+                            <Label fx:id="recordProtocolLabel" text="--" styleClass="data-card-value"/>
+                        </VBox>
+                        
+                        <!-- 进程名称卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="1">
+                            <Label text="进程名称" styleClass="data-card-title"/>
+                            <Label fx:id="recordProcessNameLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                        </VBox>
+                        
+                        <!-- 源IP地址卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="2">
+                            <Label text="源IP地址" styleClass="data-card-title"/>
+                            <Label fx:id="recordSourceIpLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                        </VBox>
+                        
+                        <!-- 目标IP地址卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="2">
+                            <Label text="目标IP地址" styleClass="data-card-title"/>
+                            <Label fx:id="recordDestIpLabel" text="--" styleClass="data-card-value" wrapText="true"/>
+                        </VBox>
+                    </GridPane>
+                    
+                    <!-- 流量速度指标卡片网格 -->
+                    <GridPane fx:id="recordSpeedGrid" styleClass="data-card-grid" hgap="10.0" vgap="10.0">
+                        <columnConstraints>
+                            <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                            <ColumnConstraints hgrow="SOMETIMES" minWidth="100.0" prefWidth="150.0"/>
+                        </columnConstraints>
+                        
+                        <!-- 下行速度卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                            <Label text="下行速度" styleClass="data-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="recordDownSpeedLabel" text="--" styleClass="data-card-value"/>
+                                <Label text="KB/s" styleClass="data-card-unit"/>
+                            </HBox>
+                        </VBox>
+                        
+                        <!-- 上行速度卡片 -->
+                        <VBox styleClass="data-card" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                            <Label text="上行速度" styleClass="data-card-title"/>
+                            <HBox spacing="4.0" alignment="BASELINE_LEFT">
+                                <Label fx:id="recordUpSpeedLabel" text="--" styleClass="data-card-value"/>
+                                <Label text="KB/s" styleClass="data-card-unit"/>
+                            </HBox>
+                        </VBox>
+                    </GridPane>
+                    
+                    <!-- 空状态提示 -->
+                    <Label fx:id="recordDetailPlaceholder" text="选择记录查看详细信息..." 
+                           style="-fx-text-fill: #999999; -fx-font-size: 13px; -fx-alignment: center;"
+                           visible="true" managed="true">
+                        <VBox.margin>
+                            <Insets top="20.0" bottom="20.0"/>
+                        </VBox.margin>
+                    </Label>
+                </VBox>
             </VBox>
             
-            <!-- IP 归属地信息显示区域 -->
-            <VBox spacing="5.0" VBox.vgrow="ALWAYS">
-                <Label text="地理位置信息：" style="-fx-font-size: 12px;"/>
-                <TextArea fx:id="ipLocationTextArea" editable="false" wrapText="true"
-                          style="-fx-font-family: 'Microsoft YaHei', 'Consolas'; -fx-font-size: 12px;"
-                          VBox.vgrow="ALWAYS">
-                    <VBox.margin>
-                        <Insets top="5.0"/>
-                    </VBox.margin>
-                </TextArea>
+            <!-- 下半部分：过滤条件和IP查询 -->
+            <VBox spacing="15.0" style="-fx-padding: 15px;" VBox.vgrow="ALWAYS">
+                <!-- 过滤设置面板 -->
+                <TitledPane text="过滤设置" collapsible="true" expanded="true" styleClass="filter-titled-pane">
+                    <VBox spacing="15.0" style="-fx-padding: 15px;">
+                        <!-- 协议类型、应用（进程）和清除过滤按钮在同一行 -->
+                        <HBox spacing="20.0" alignment="CENTER_LEFT">
+                            <!-- 协议过滤（横向排列） -->
+                            <VBox spacing="8.0" HBox.hgrow="NEVER">
+                                <Label text="协议类型" style="-fx-font-size: 13px; -fx-font-weight: bold;"/>
+                                <HBox spacing="10.0">
+                                    <CheckBox fx:id="protocolTcpCheckBox" text="TCP"/>
+                                    <CheckBox fx:id="protocolUdpCheckBox" text="UDP"/>
+                                    <CheckBox fx:id="protocolOtherCheckBox" text="其他"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- 应用过滤 -->
+                            <VBox spacing="8.0" HBox.hgrow="NEVER">
+                                <Label text="应用（进程）" style="-fx-font-size: 13px; -fx-font-weight: bold;"/>
+                                <ComboBox fx:id="processNameComboBox" promptText="选择应用..." 
+                                         style="-fx-pref-width: 180px;"/>
+                            </VBox>
+                            
+                            <!-- 清除过滤按钮（右对齐） -->
+                            <Region HBox.hgrow="ALWAYS"/>
+                            <VBox spacing="8.0" alignment="BOTTOM_RIGHT">
+                                <Label text=" " style="-fx-font-size: 13px; -fx-font-weight: bold;"/>
+                                <Button text="清除过滤" onAction="#onClearFiltersClick" 
+                                       styleClass="clear-filter-button"/>
+                            </VBox>
+                        </HBox>
+                        
+                        <!-- 流量阈值过滤 -->
+                        <VBox spacing="8.0">
+                            <Label text="最小下载速度" style="-fx-font-size: 13px; -fx-font-weight: bold;"/>
+                            <HBox spacing="5.0" alignment="CENTER_LEFT">
+                                <TextField fx:id="minDownSpeedTextField" promptText="0.0" 
+                                          style="-fx-pref-width: 100px;" HBox.hgrow="ALWAYS"/>
+                                <Label text="KB/s" style="-fx-font-size: 12px;"/>
+                            </HBox>
+                            <Slider fx:id="minDownSpeedSlider" min="0" max="10000" value="0" 
+                                   showTickLabels="true" showTickMarks="true" majorTickUnit="2000" 
+                                   minorTickCount="4" blockIncrement="100"/>
+                        </VBox>
+                    </VBox>
+                </TitledPane>
+                
+                <!-- IP 工具面板 -->
+                <TitledPane text="IP 工具" collapsible="true" expanded="true" styleClass="ip-tool-titled-pane" VBox.vgrow="ALWAYS">
+                    <ScrollPane fitToWidth="true" VBox.vgrow="ALWAYS">
+                        <VBox spacing="12.0" style="-fx-padding: 15px;">
+                            <!-- IP 输入区域 -->
+                            <VBox spacing="5.0">
+                                <Label text="输入 IP 地址：" style="-fx-font-size: 12px; -fx-font-weight: 500;"/>
+                                <HBox spacing="5.0">
+                                    <TextField fx:id="ipInputField" promptText="例如: 8.8.8.8" 
+                                               style="-fx-pref-width: 200px;"/>
+                                    <Button fx:id="queryIpButton" text="查询" 
+                                            onAction="#onQueryIpButtonClick"
+                                            style="-fx-pref-width: 80px;"/>
+                                </HBox>
+                            </VBox>
+                            
+                            <!-- IP 归属地信息显示区域（结构化Label） -->
+                            <VBox spacing="8.0" fx:id="ipLocationContainer" styleClass="ip-location-container">
+                                <Label text="地理位置信息" style="-fx-font-size: 12px; -fx-font-weight: 500;"/>
+                                <VBox spacing="6.0" fx:id="ipLocationInfoBox" styleClass="ip-location-info-box">
+                                    <!-- 动态填充的Label将在这里显示 -->
+                                </VBox>
+                            </VBox>
+                            
+                            <!-- 提示信息 -->
+                            <Label fx:id="ipQueryStatusLabel" text="点击表格行或输入 IP 地址进行查询" 
+                                   style="-fx-font-size: 11px; -fx-text-fill: #757575;"/>
+                        </VBox>
+                    </ScrollPane>
+                </TitledPane>
             </VBox>
-            
-            <!-- 提示信息 -->
-            <Label fx:id="ipQueryStatusLabel" text="点击表格行或输入 IP 地址进行查询" 
-                   style="-fx-font-size: 11px; -fx-text-fill: gray;"/>
-        </VBox>
+            </SplitPane>
             </SplitPane>
         </Tab>
     </TabPane>

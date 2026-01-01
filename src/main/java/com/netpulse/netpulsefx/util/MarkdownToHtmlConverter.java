@@ -1,8 +1,11 @@
 package com.netpulse.netpulsefx.util;
 
+import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.data.MutableDataSet;
+
+import java.util.Arrays;
 
 /**
  * Markdown 转 HTML 工具类
@@ -13,7 +16,8 @@ import com.vladsch.flexmark.util.data.MutableDataSet;
  * <p>功能说明：</p>
  * <ul>
  *   <li>支持标准 Markdown 语法（标题、列表、粗体、斜体、代码块等）</li>
- *   <li>支持常用的 Markdown 扩展语法</li>
+ *   <li>支持表格、任务列表等扩展语法</li>
+ *   <li>支持 Emoji 等特殊符号</li>
  *   <li>自动添加内联 CSS 样式，使 HTML 内容与 JavaFX 主题保持一致</li>
  * </ul>
  * 
@@ -23,9 +27,14 @@ public class MarkdownToHtmlConverter {
     
     /**
      * 配置 flexmark 解析器选项
-     * 使用 MutableDataSet 配置基本选项
+     * 显式启用表格扩展，确保表格能够正确解析
      */
     private static final MutableDataSet OPTIONS = new MutableDataSet();
+    
+    static {
+        // 显式启用表格扩展
+        OPTIONS.set(Parser.EXTENSIONS, Arrays.asList(TablesExtension.create()));
+    }
     
     /**
      * Markdown 解析器实例（线程安全，可复用）
@@ -50,12 +59,35 @@ public class MarkdownToHtmlConverter {
             return wrapWithHtmlTemplate("");
         }
         
-        // 解析 Markdown 并转换为 HTML
-        var document = PARSER.parse(markdown);
-        String htmlBody = RENDERER.render(document);
-        
-        // 包装为完整的 HTML 文档，并添加样式
-        return wrapWithHtmlTemplate(htmlBody);
+        try {
+            // 解析 Markdown 并转换为 HTML
+            var document = PARSER.parse(markdown);
+            String htmlBody = RENDERER.render(document);
+            
+            // 调试输出：检查是否包含表格标签
+            if (htmlBody.contains("<table") || htmlBody.contains("&lt;table")) {
+                System.out.println("[MarkdownToHtmlConverter] 检测到表格标签");
+            }
+            
+            // 包装为完整的 HTML 文档，并添加样式
+            return wrapWithHtmlTemplate(htmlBody);
+        } catch (Exception e) {
+            System.err.println("[MarkdownToHtmlConverter] 转换失败: " + e.getMessage());
+            e.printStackTrace();
+            // 如果转换失败，返回原始文本（转义 HTML）
+            return wrapWithHtmlTemplate("<pre>" + escapeHtml(markdown) + "</pre>");
+        }
+    }
+    
+    /**
+     * 转义 HTML 特殊字符
+     */
+    private static String escapeHtml(String text) {
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
     }
     
     /**
@@ -90,6 +122,9 @@ public class MarkdownToHtmlConverter {
                         padding: 20px;
                         margin: 0;
                         word-wrap: break-word;
+                        /* 确保 Emoji 和特殊符号正确显示 */
+                        font-feature-settings: "liga" 1, "calt" 1;
+                        text-rendering: optimizeLegibility;
                     }
                     
                     h1 {
@@ -199,24 +234,49 @@ public class MarkdownToHtmlConverter {
                     
                     table {
                         border-collapse: collapse;
+                        border-spacing: 0;
                         width: 100%%;
-                        margin-top: 0;
+                        margin-top: 16px;
                         margin-bottom: 16px;
+                        display: table;
                     }
                     
-                    th, td {
+                    table thead {
+                        display: table-header-group;
+                        background-color: #f6f8fa;
+                    }
+                    
+                    table tbody {
+                        display: table-row-group;
+                    }
+                    
+                    table tr {
+                        display: table-row;
+                        border-top: 1px solid #dfe2e5;
+                    }
+                    
+                    table tr:nth-child(even) {
+                        background-color: #f6f8fa;
+                    }
+                    
+                    table tr:hover {
+                        background-color: #f9fafb;
+                    }
+                    
+                    table th, table td {
                         padding: 8px 12px;
                         border: 1px solid #dfe2e5;
+                        display: table-cell;
                     }
                     
-                    th {
+                    table th {
                         background-color: #f6f8fa;
                         font-weight: 600;
                         text-align: left;
                     }
                     
-                    tr:nth-child(even) {
-                        background-color: #f6f8fa;
+                    table td {
+                        text-align: left;
                     }
                     
                     hr {
@@ -224,6 +284,22 @@ public class MarkdownToHtmlConverter {
                         background-color: #e1e4e8;
                         border: 0;
                         margin: 24px 0;
+                    }
+                    
+                    /* 引用块样式增强 */
+                    blockquote {
+                        margin-left: 0;
+                        margin-right: 0;
+                        margin-top: 16px;
+                        margin-bottom: 16px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                    }
+                    
+                    /* 确保代码块中的内容可以横向滚动 */
+                    pre {
+                        white-space: pre;
+                        overflow-x: auto;
                     }
                 </style>
             </head>

@@ -3,10 +3,14 @@ package com.netpulse.netpulsefx.task;
 import com.netpulse.netpulsefx.service.ProcessContextService;
 import javafx.concurrent.Task;
 import org.pcap4j.core.*;
+import org.pcap4j.core.BpfProgram.BpfCompileMode;
 import org.pcap4j.packet.Packet;
 import org.pcap4j.packet.IpPacket;
+import org.pcap4j.packet.IpV4Packet;
+import org.pcap4j.packet.IpV6Packet;
 import org.pcap4j.packet.TcpPacket;
 import org.pcap4j.packet.UdpPacket;
+import org.pcap4j.packet.namednumber.IpNumber;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,13 +34,27 @@ public class TrafficMonitorTask extends Task<Void> {
     /** 要监控的网络接口 */
     private final PcapNetworkInterface networkInterface;
     
+    /** BPF 过滤表达式（可选，如果为 null 则不使用过滤器） */
+    private final String bpfFilterExpression;
+    
+    /** 本地 IP 地址（用于区分上行和下行流量） */
+    private final String localIpAddress;
+    
     /** 
-     * 原子变量：用于线程安全地累加捕获的字节数
+     * 原子变量：用于线程安全地累加捕获的上行字节数
      * 使用 AtomicLong 确保多线程环境下的数据一致性
      * - 抓包线程：持续累加字节数
      * - 读取线程：读取并清零（使用 getAndSet(0) 原子操作）
      */
-    private final AtomicLong bytesCaptured;
+    private final AtomicLong bytesUploaded;
+    
+    /** 
+     * 原子变量：用于线程安全地累加捕获的下行字节数
+     * 使用 AtomicLong 确保多线程环境下的数据一致性
+     * - 抓包线程：持续累加字节数
+     * - 读取线程：读取并清零（使用 getAndSet(0) 原子操作）
+     */
+    private final AtomicLong bytesDownloaded;
     
     /** 
      * IP 地址统计：用于存储最近捕获的数据包的IP地址信息
@@ -45,11 +63,11 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     private final Map<String, Integer> ipAddressCounts;
     
-    /** 进程流量统计：用于存储每个进程的累计流量
-     * Key: 进程名称, Value: 累计字节数
+    /** 进程流量统计：用于存储每个进程的累计流量（区分上下行）
+     * Key: 进程名称, Value: ProcessTrafficStats（包含上行和下行字节数）
      * 使用 ConcurrentHashMap 确保线程安全
      */
-    private final Map<String, Long> processTrafficBytes;
+    private final Map<String, ProcessTrafficStats> processTrafficBytes;
     
     /** 最近捕获的源IP地址（用于传递给数据库） */
     private volatile String lastSourceIp;
@@ -62,6 +80,12 @@ public class TrafficMonitorTask extends Task<Void> {
     
     /** 最近捕获的进程名称 */
     private volatile String lastProcessName;
+    
+    /** 最近捕获的协议类型（TCP, UDP, ICMP, 其他） */
+    private volatile String lastProtocol;
+    
+    /** 协议统计：用于统计每秒内各种协议的数量 */
+    private final Map<String, Integer> protocolCounts;
     
     /** 进程上下文服务 */
     private final ProcessContextService processContextService;
@@ -78,14 +102,41 @@ public class TrafficMonitorTask extends Task<Void> {
      * @param networkInterface 要监控的网络接口
      */
     public TrafficMonitorTask(PcapNetworkInterface networkInterface) {
+        this(networkInterface, null, null);
+    }
+    
+    /**
+     * 构造函数（带 BPF 过滤器）
+     * 
+     * @param networkInterface 要监控的网络接口
+     * @param bpfFilterExpression BPF 过滤表达式（可选，如果为 null 则不使用过滤器）
+     */
+    public TrafficMonitorTask(PcapNetworkInterface networkInterface, String bpfFilterExpression) {
+        this(networkInterface, bpfFilterExpression, null);
+    }
+    
+    /**
+     * 构造函数（带 BPF 过滤器和本地 IP 地址）
+     * 
+     * @param networkInterface 要监控的网络接口
+     * @param bpfFilterExpression BPF 过滤表达式（可选，如果为 null 则不使用过滤器）
+     * @param localIpAddress 本地 IP 地址（用于区分上行和下行流量）
+     */
+    public TrafficMonitorTask(PcapNetworkInterface networkInterface, String bpfFilterExpression, String localIpAddress) {
         this.networkInterface = networkInterface;
-        this.bytesCaptured = new AtomicLong(0);
+        this.bpfFilterExpression = (bpfFilterExpression != null && !bpfFilterExpression.trim().isEmpty()) 
+                ? bpfFilterExpression.trim() : null;
+        this.localIpAddress = localIpAddress;
+        this.bytesUploaded = new AtomicLong(0);
+        this.bytesDownloaded = new AtomicLong(0);
         this.ipAddressCounts = new ConcurrentHashMap<>();
         this.processTrafficBytes = new ConcurrentHashMap<>();
         this.lastSourceIp = null;
         this.lastDestIp = null;
         this.lastLocalPort = null;
         this.lastProcessName = null;
+        this.lastProtocol = null;
+        this.protocolCounts = new ConcurrentHashMap<>();
         this.processContextService = ProcessContextService.getInstance();
         this.monitoringActive = false;
     }
@@ -113,8 +164,21 @@ public class TrafficMonitorTask extends Task<Void> {
                     10
             );
             
-            // 更新任务状态：开始捕获
-            updateMessage("正在监控网卡：" + networkInterface.getDescription());
+            // 如果指定了 BPF 过滤表达式，则设置过滤器
+            // 注意：此操作在内核空间完成过滤，可大幅降低 JVM 的 GC 压力
+            // 因为不符合过滤条件的数据包在内核层就被丢弃，不会传递给 Java 应用
+            if (bpfFilterExpression != null) {
+                try {
+                    pcapHandle.setFilter(bpfFilterExpression, BpfCompileMode.OPTIMIZE);
+                    updateMessage("正在监控网卡：" + networkInterface.getDescription() + 
+                            " (BPF过滤: " + bpfFilterExpression + ")");
+                } catch (Exception e) {
+                    // 如果设置过滤器失败，抛出异常（这种情况应该已经在 UI 校验阶段被发现）
+                    throw new Exception("设置 BPF 过滤器失败：\n" + e.getMessage(), e);
+                }
+            } else {
+                updateMessage("正在监控网卡：" + networkInterface.getDescription());
+            }
             
             // 创建数据包监听器，处理捕获到的每个数据包
             PacketListener listener = new PacketListener() {
@@ -128,12 +192,18 @@ public class TrafficMonitorTask extends Task<Void> {
                     // 获取数据包的长度（字节数）
                     int packetLength = packet.length();
                     
-                    // 使用原子操作累加字节数
-                    // addAndGet() 是原子操作，确保线程安全
-                    bytesCaptured.addAndGet(packetLength);
+                    // 识别协议类型并统计
+                    String protocol = identifyProtocol(packet);
+                    if (protocol != null) {
+                        // 统计协议数量
+                        protocolCounts.merge(protocol, 1, Integer::sum);
+                    }
                     
-                    // 尝试提取IP地址信息
+                    // 尝试提取IP地址信息并区分上下行流量
                     extractIpAddresses(packet);
+                    
+                    // 根据数据包方向累加到对应的计数器
+                    classifyAndCountTraffic(packet, packetLength);
                 }
             };
             
@@ -161,17 +231,70 @@ public class TrafficMonitorTask extends Task<Void> {
     }
     
     /**
-     * 获取当前累计的字节数并清零
+     * 根据数据包的方向分类并累加流量
+     * 如果源 IP 等于本地 IP，则为上行流量（上传）
+     * 如果目标 IP 等于本地 IP，则为下行流量（下载）
+     * 
+     * @param packet 数据包对象
+     * @param packetLength 数据包长度（字节）
+     */
+    private void classifyAndCountTraffic(Packet packet, int packetLength) {
+        // 如果没有设置本地 IP，无法区分方向，跳过
+        if (localIpAddress == null || localIpAddress.isEmpty()) {
+            // 如果没有本地 IP，将流量平均分配到上下行（向后兼容）
+            bytesUploaded.addAndGet(packetLength / 2);
+            bytesDownloaded.addAndGet(packetLength / 2);
+            return;
+        }
+        
+        try {
+            // 尝试获取 IP 数据包（可能是 IPv4 或 IPv6）
+            IpPacket ipPacket = packet.get(IpPacket.class);
+            
+            if (ipPacket != null) {
+                // 获取源 IP 和目标 IP
+                String sourceIp = ipPacket.getHeader().getSrcAddr().getHostAddress();
+                String destIp = ipPacket.getHeader().getDstAddr().getHostAddress();
+                
+                // 判断方向并累加
+                if (localIpAddress.equals(sourceIp)) {
+                    // 源 IP 是本地 IP，这是上行流量（上传）
+                    bytesUploaded.addAndGet(packetLength);
+                } else if (localIpAddress.equals(destIp)) {
+                    // 目标 IP 是本地 IP，这是下行流量（下载）
+                    bytesDownloaded.addAndGet(packetLength);
+                } else {
+                    // 如果源 IP 和目标 IP 都不是本地 IP，可能是路由包或其他情况
+                    // 这种情况下，我们无法确定方向，可以选择忽略或平均分配
+                    // 这里选择忽略，因为这种情况比较少见
+                }
+            } else {
+                // 不是 IP 数据包（可能是 ARP、ICMP 等），无法判断方向
+                // 将流量平均分配到上下行
+                bytesUploaded.addAndGet(packetLength / 2);
+                bytesDownloaded.addAndGet(packetLength / 2);
+            }
+        } catch (Exception e) {
+            // 解析失败，将流量平均分配到上下行
+            bytesUploaded.addAndGet(packetLength / 2);
+            bytesDownloaded.addAndGet(packetLength / 2);
+        }
+    }
+    
+    /**
+     * 获取当前累计的上行和下行字节数并清零
      * 这是一个原子操作，确保线程安全
      * 
-     * @return 累计的字节数（清零前）
+     * @return 包含上行和下行字节数的数组，[0] 为上行字节数，[1] 为下行字节数
      */
-    public long getAndResetBytes() {
+    public long[] getAndResetBytes() {
         // getAndSet(0) 是原子操作：
         // 1. 返回当前值
         // 2. 将值设置为 0
         // 这确保了读取和清零操作的原子性，避免数据丢失
-        return bytesCaptured.getAndSet(0);
+        long uploaded = bytesUploaded.getAndSet(0);
+        long downloaded = bytesDownloaded.getAndSet(0);
+        return new long[]{uploaded, downloaded};
     }
     
     /**
@@ -217,6 +340,70 @@ public class TrafficMonitorTask extends Task<Void> {
      */
     public boolean isMonitoringActive() {
         return monitoringActive;
+    }
+    
+    /**
+     * 识别数据包的协议类型
+     * 
+     * <p>使用 Pcap4j 的 contains 方法识别 TCP、UDP 协议，通过 IP 协议类型识别 ICMP。</p>
+     * 
+     * @param packet 数据包对象
+     * @return 协议类型（TCP, UDP, ICMP, 其他），如果未识别则返回 null
+     */
+    private String identifyProtocol(Packet packet) {
+        try {
+            // 尝试获取 IP 数据包
+            IpPacket ipPacket = packet.get(IpPacket.class);
+            if (ipPacket == null) {
+                // 不是 IP 数据包，标记为"其他"
+                lastProtocol = "其他";
+                return "其他";
+            }
+            
+            // 检查是否为 TCP 数据包
+            if (packet.contains(TcpPacket.class)) {
+                lastProtocol = "TCP";
+                return "TCP";
+            }
+            
+            // 检查是否为 UDP 数据包
+            if (packet.contains(UdpPacket.class)) {
+                lastProtocol = "UDP";
+                return "UDP";
+            }
+            
+            // 检查是否为 ICMP 数据包（通过 IP 协议类型判断）
+            // IPv4: ICMP 协议号为 1
+            // IPv6: ICMPv6 下一报头类型为 58
+            IpV4Packet ipV4Packet = packet.get(IpV4Packet.class);
+            if (ipV4Packet != null) {
+                // IPv4 数据包
+                IpNumber protocol = ipV4Packet.getHeader().getProtocol();
+                if (protocol == IpNumber.ICMPV4) {
+                    lastProtocol = "ICMP";
+                    return "ICMP";
+                }
+            } else {
+                // 尝试 IPv6
+                IpV6Packet ipV6Packet = packet.get(IpV6Packet.class);
+                if (ipV6Packet != null) {
+                    // IPv6 数据包
+                    IpNumber nextHeader = ipV6Packet.getHeader().getNextHeader();
+                    if (nextHeader == IpNumber.ICMPV6) {
+                        lastProtocol = "ICMP";
+                        return "ICMP";
+                    }
+                }
+            }
+            
+            // 其他协议类型
+            lastProtocol = "其他";
+            return "其他";
+        } catch (Exception e) {
+            // 协议识别失败，标记为"其他"
+            lastProtocol = "其他";
+            return "其他";
+        }
     }
     
     /**
@@ -266,7 +453,7 @@ public class TrafficMonitorTask extends Task<Void> {
     }
     
     /**
-     * 提取端口信息并查找对应进程
+     * 提取端口信息并查找对应进程，同时根据数据包方向统计进程流量
      * 
      * @param ipPacket IP 数据包
      * @param sourceIp 源IP地址
@@ -276,6 +463,23 @@ public class TrafficMonitorTask extends Task<Void> {
         try {
             String processName = null;
             int localPort = 0;
+            
+            // 获取目标 IP 地址，用于判断数据包方向
+            String destIp = ipPacket.getHeader().getDstAddr().getHostAddress();
+            
+            // 判断数据包方向
+            boolean isUpload = false;  // 是否为上行流量
+            boolean isDownload = false; // 是否为下行流量
+            
+            if (localIpAddress != null && !localIpAddress.isEmpty()) {
+                if (localIpAddress.equals(sourceIp)) {
+                    // 源 IP 是本地 IP，这是上行流量（上传）
+                    isUpload = true;
+                } else if (localIpAddress.equals(destIp)) {
+                    // 目标 IP 是本地 IP，这是下行流量（下载）
+                    isDownload = true;
+                }
+            }
             
             // 尝试获取 TCP 数据包
             TcpPacket tcpPacket = ipPacket.get(TcpPacket.class);
@@ -287,6 +491,13 @@ public class TrafficMonitorTask extends Task<Void> {
                     localPort = srcPort;
                     // 查找进程
                     processName = processContextService.findProcessByPacket(sourceIp, srcPort);
+                } else {
+                    // 如果源 IP 不是本地，尝试通过目标 IP 和目标端口查找进程
+                    int dstPort = tcpPacket.getHeader().getDstPort().valueAsInt();
+                    if (localIpAddress != null && localIpAddress.equals(destIp)) {
+                        localPort = dstPort;
+                        processName = processContextService.findProcessByPacket(destIp, dstPort);
+                    }
                 }
             } else {
                 // 尝试获取 UDP 数据包
@@ -299,6 +510,13 @@ public class TrafficMonitorTask extends Task<Void> {
                         localPort = srcPort;
                         // 查找进程
                         processName = processContextService.findProcessByPacket(sourceIp, srcPort);
+                    } else {
+                        // 如果源 IP 不是本地，尝试通过目标 IP 和目标端口查找进程
+                        int dstPort = udpPacket.getHeader().getDstPort().valueAsInt();
+                        if (localIpAddress != null && localIpAddress.equals(destIp)) {
+                            localPort = dstPort;
+                            processName = processContextService.findProcessByPacket(destIp, dstPort);
+                        }
                     }
                 }
             }
@@ -308,8 +526,21 @@ public class TrafficMonitorTask extends Task<Void> {
                 lastProcessName = processName;
                 lastLocalPort = localPort;
                 
-                // 累加进程流量统计
-                processTrafficBytes.merge(processName, (long) packetSize, Long::sum);
+                // 根据数据包方向累加进程流量统计
+                ProcessTrafficStats stats = processTrafficBytes.computeIfAbsent(
+                    processName, 
+                    k -> new ProcessTrafficStats()
+                );
+                
+                if (isUpload) {
+                    stats.addUpload(packetSize);
+                } else if (isDownload) {
+                    stats.addDownload(packetSize);
+                } else {
+                    // 如果无法确定方向，平均分配
+                    stats.addUpload(packetSize / 2);
+                    stats.addDownload(packetSize / 2);
+                }
             }
         } catch (Exception e) {
             // 端口提取失败，忽略错误
@@ -406,6 +637,80 @@ public class TrafficMonitorTask extends Task<Void> {
     }
     
     /**
+     * 获取并清空最近捕获的协议类型（原子操作）
+     * 
+     * <p>返回每秒内出现次数最多的协议类型。如果所有协议数量相同，则按优先级返回：TCP > UDP > ICMP > 其他</p>
+     * 
+     * @return 协议类型（TCP, UDP, ICMP, 其他），如果未识别则返回 "其他"
+     */
+    public String getAndClearLastProtocol() {
+        // 获取每秒内出现次数最多的协议
+        String mostCommonProtocol = getMostCommonProtocol();
+        
+        // 调试输出
+        if (mostCommonProtocol == null) {
+            System.out.println("[TrafficMonitorTask] 警告：协议类型为 null，使用默认值'其他'");
+            mostCommonProtocol = "其他";
+        } else {
+            System.out.println("[TrafficMonitorTask] 获取协议类型: " + mostCommonProtocol + 
+                ", 统计: " + protocolCounts);
+        }
+        
+        // 清空统计
+        protocolCounts.clear();
+        lastProtocol = null;
+        
+        return mostCommonProtocol;
+    }
+    
+    /**
+     * 获取每秒内出现次数最多的协议类型
+     * 
+     * @return 协议类型（TCP, UDP, ICMP, 其他），如果未识别则返回 null
+     */
+    private String getMostCommonProtocol() {
+        if (protocolCounts.isEmpty()) {
+            // 如果没有统计数据，返回最后识别的协议
+            if (lastProtocol == null) {
+                System.out.println("[TrafficMonitorTask] 警告：协议统计为空且 lastProtocol 为 null");
+            }
+            return lastProtocol;
+        }
+        
+        // 找到出现次数最多的协议
+        String mostCommon = null;
+        int maxCount = 0;
+        
+        // 协议优先级：TCP > UDP > ICMP > 其他
+        String[] priorityOrder = {"TCP", "UDP", "ICMP", "其他"};
+        
+        for (String protocol : priorityOrder) {
+            Integer count = protocolCounts.get(protocol);
+            if (count != null && count > maxCount) {
+                maxCount = count;
+                mostCommon = protocol;
+            }
+        }
+        
+        // 如果找到了，返回；否则返回最后识别的协议
+        String result = mostCommon != null ? mostCommon : lastProtocol;
+        if (result == null) {
+            System.out.println("[TrafficMonitorTask] 警告：无法确定协议类型，使用默认值'其他'");
+            result = "其他";
+        }
+        return result;
+    }
+    
+    /**
+     * 获取最近捕获的协议类型（不清空）
+     * 
+     * @return 协议类型（TCP, UDP, ICMP, 其他），如果未识别则返回 null
+     */
+    public String getLastProtocol() {
+        return lastProtocol;
+    }
+    
+    /**
      * 获取IP地址统计信息（用于调试或分析）
      * 
      * @return IP地址出现次数的映射（只读副本）
@@ -426,10 +731,14 @@ public class TrafficMonitorTask extends Task<Void> {
      * 
      * <p>用于在读取进程流量后清空，避免重复使用旧数据。</p>
      * 
-     * @return 进程流量映射：进程名 -> 累计字节数
+     * @return 进程流量映射：进程名 -> ProcessTrafficStats（包含上行和下行字节数）
      */
-    public Map<String, Long> getAndClearProcessTraffic() {
-        Map<String, Long> result = new ConcurrentHashMap<>(processTrafficBytes);
+    public Map<String, ProcessTrafficStats> getAndClearProcessTraffic() {
+        Map<String, ProcessTrafficStats> result = new ConcurrentHashMap<>();
+        // 创建副本并清空原映射
+        for (Map.Entry<String, ProcessTrafficStats> entry : processTrafficBytes.entrySet()) {
+            result.put(entry.getKey(), new ProcessTrafficStats(entry.getValue()));
+        }
         processTrafficBytes.clear();
         return result;
     }
@@ -439,8 +748,51 @@ public class TrafficMonitorTask extends Task<Void> {
      * 
      * @return 进程流量映射的副本
      */
-    public Map<String, Long> getProcessTraffic() {
-        return new ConcurrentHashMap<>(processTrafficBytes);
+    public Map<String, ProcessTrafficStats> getProcessTraffic() {
+        Map<String, ProcessTrafficStats> result = new ConcurrentHashMap<>();
+        for (Map.Entry<String, ProcessTrafficStats> entry : processTrafficBytes.entrySet()) {
+            result.put(entry.getKey(), new ProcessTrafficStats(entry.getValue()));
+        }
+        return result;
+    }
+    
+    /**
+     * 进程流量统计数据结构
+     * 用于存储每个进程的上行和下行流量
+     */
+    public static class ProcessTrafficStats {
+        private long uploadBytes;
+        private long downloadBytes;
+        
+        public ProcessTrafficStats() {
+            this.uploadBytes = 0;
+            this.downloadBytes = 0;
+        }
+        
+        public ProcessTrafficStats(ProcessTrafficStats other) {
+            this.uploadBytes = other.uploadBytes;
+            this.downloadBytes = other.downloadBytes;
+        }
+        
+        public void addUpload(long bytes) {
+            this.uploadBytes += bytes;
+        }
+        
+        public void addDownload(long bytes) {
+            this.downloadBytes += bytes;
+        }
+        
+        public long getUploadBytes() {
+            return uploadBytes;
+        }
+        
+        public long getDownloadBytes() {
+            return downloadBytes;
+        }
+        
+        public long getTotalBytes() {
+            return uploadBytes + downloadBytes;
+        }
     }
 }
 

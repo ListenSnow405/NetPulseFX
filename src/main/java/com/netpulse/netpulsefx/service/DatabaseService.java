@@ -271,6 +271,7 @@ public class DatabaseService {
      *   <li><strong>source_ip</strong>: VARCHAR(45) - 源IP地址</li>
      *   <li><strong>dest_ip</strong>: VARCHAR(45) - 目标IP地址</li>
      *   <li><strong>process_name</strong>: VARCHAR(255) - 进程名称</li>
+     *   <li><strong>protocol</strong>: VARCHAR(10) - 协议类型（TCP, UDP, ICMP, 其他）</li>
      *   <li><strong>record_time</strong>: TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP - 记录时间</li>
      * </ul>
      * 
@@ -314,6 +315,7 @@ public class DatabaseService {
             addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "source_ip", "VARCHAR(45)");
             addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "dest_ip", "VARCHAR(45)");
             addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "process_name", "VARCHAR(255)");
+            addColumnIfNotExists(TABLE_TRAFFIC_RECORDS, "protocol", "VARCHAR(10)");
         }
     }
     
@@ -435,17 +437,34 @@ public class DatabaseService {
      * @param sourceIp 源IP地址（可为null）
      * @param destIp 目标IP地址（可为null）
      * @param processName 进程名称（可为null）
+     * @param protocol 协议类型（TCP, UDP, ICMP, 其他，可为null）
      * @return CompletableFuture<Void> 异步操作结果
      */
     public CompletableFuture<Void> saveDetailRecord(int sessionId, double downSpeed, double upSpeed,
-                                                   String sourceIp, String destIp, String processName) {
+                                                   String sourceIp, String destIp, String processName, String protocol) {
         return CompletableFuture.runAsync(() -> {
             try {
-                saveDetailRecordSync(sessionId, downSpeed, upSpeed, sourceIp, destIp, processName);
+                saveDetailRecordSync(sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, protocol);
             } catch (SQLException e) {
                 throw new RuntimeException("保存流量明细记录失败: " + e.getMessage(), e);
             }
         }, executorService);
+    }
+    
+    /**
+     * 保存流量明细记录（向后兼容方法，不包含协议）
+     * 
+     * @param sessionId 会话 ID
+     * @param downSpeed 下行速度（KB/s）
+     * @param upSpeed 上行速度（KB/s）
+     * @param sourceIp 源IP地址（可为null）
+     * @param destIp 目标IP地址（可为null）
+     * @param processName 进程名称（可为null）
+     * @return CompletableFuture<Void> 异步操作结果
+     */
+    public CompletableFuture<Void> saveDetailRecord(int sessionId, double downSpeed, double upSpeed,
+                                                   String sourceIp, String destIp, String processName) {
+        return saveDetailRecord(sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, null);
     }
     
     /**
@@ -457,10 +476,11 @@ public class DatabaseService {
      * @param sourceIp 源IP地址（可为null）
      * @param destIp 目标IP地址（可为null）
      * @param processName 进程名称（可为null）
+     * @param protocol 协议类型（TCP, UDP, ICMP, 其他，可为null）
      * @throws SQLException 如果数据库操作失败
      */
     private void saveDetailRecordSync(int sessionId, double downSpeed, double upSpeed,
-                                     String sourceIp, String destIp, String processName) throws SQLException {
+                                     String sourceIp, String destIp, String processName, String protocol) throws SQLException {
         if (connection == null || connection.isClosed()) {
             throw new SQLException("数据库连接未初始化或已关闭");
         }
@@ -470,8 +490,8 @@ public class DatabaseService {
         
         try {
             String insertSQL = """
-                INSERT INTO %s (session_id, down_speed, up_speed, source_ip, dest_ip, process_name, record_time)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO %s (session_id, down_speed, up_speed, source_ip, dest_ip, process_name, protocol, record_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """.formatted(TABLE_TRAFFIC_RECORDS);
             
             try (PreparedStatement pstmt = connection.prepareStatement(insertSQL)) {
@@ -481,6 +501,7 @@ public class DatabaseService {
                 pstmt.setString(4, sourceIp);
                 pstmt.setString(5, destIp);
                 pstmt.setString(6, processName);
+                pstmt.setString(7, protocol);
                 
                 pstmt.executeUpdate();
                 connection.commit();
@@ -1099,7 +1120,7 @@ public class DatabaseService {
         }
         
         String querySQL = """
-            SELECT record_id, session_id, down_speed, up_speed, source_ip, dest_ip, process_name, record_time
+            SELECT record_id, session_id, down_speed, up_speed, source_ip, dest_ip, process_name, protocol, record_time
             FROM %s
             WHERE session_id = ?
             ORDER BY record_time ASC
@@ -1120,6 +1141,7 @@ public class DatabaseService {
                         rs.getString("source_ip"),
                         rs.getString("dest_ip"),
                         rs.getString("process_name"),
+                        rs.getString("protocol"),
                         rs.getTimestamp("record_time")
                     );
                     records.add(record);
@@ -1166,7 +1188,7 @@ public class DatabaseService {
         // JOIN 会话表以获取网卡名称，保持向后兼容
         String querySQL = """
             SELECT tr.record_id, tr.session_id, tr.down_speed, tr.up_speed, 
-                   tr.source_ip, tr.dest_ip, tr.process_name, tr.record_time,
+                   tr.source_ip, tr.dest_ip, tr.process_name, tr.protocol, tr.record_time,
                    ms.iface_name
             FROM %s tr
             INNER JOIN %s ms ON tr.session_id = ms.session_id
@@ -1187,6 +1209,7 @@ public class DatabaseService {
                     rs.getString("source_ip"),
                     rs.getString("dest_ip"),
                     rs.getString("process_name"),
+                    rs.getString("protocol"),
                     rs.getTimestamp("record_time"),
                     rs.getString("iface_name")
                 );
@@ -1225,9 +1248,9 @@ public class DatabaseService {
             throw new SQLException("数据库连接未初始化或已关闭");
         }
         
-        String querySQL = """
+            String querySQL = """
             SELECT tr.record_id, tr.session_id, tr.down_speed, tr.up_speed, 
-                   tr.source_ip, tr.dest_ip, tr.process_name, tr.record_time,
+                   tr.source_ip, tr.dest_ip, tr.process_name, tr.protocol, tr.record_time,
                    ms.iface_name
             FROM %s tr
             INNER JOIN %s ms ON tr.session_id = ms.session_id
@@ -1250,6 +1273,7 @@ public class DatabaseService {
                         rs.getString("source_ip"),
                         rs.getString("dest_ip"),
                         rs.getString("process_name"),
+                        rs.getString("protocol"),
                         rs.getTimestamp("record_time"),
                         rs.getString("iface_name")
                     );
@@ -1289,9 +1313,9 @@ public class DatabaseService {
             throw new SQLException("数据库连接未初始化或已关闭");
         }
         
-        String querySQL = """
+            String querySQL = """
             SELECT tr.record_id, tr.session_id, tr.down_speed, tr.up_speed, 
-                   tr.source_ip, tr.dest_ip, tr.process_name, tr.record_time,
+                   tr.source_ip, tr.dest_ip, tr.process_name, tr.protocol, tr.record_time,
                    ms.iface_name
             FROM %s tr
             INNER JOIN %s ms ON tr.session_id = ms.session_id
@@ -1314,6 +1338,7 @@ public class DatabaseService {
                         rs.getString("source_ip"),
                         rs.getString("dest_ip"),
                         rs.getString("process_name"),
+                        rs.getString("protocol"),
                         rs.getTimestamp("record_time"),
                         rs.getString("iface_name")
                     );
@@ -1323,6 +1348,136 @@ public class DatabaseService {
         }
         
         return records;
+    }
+    
+    /**
+     * 使用 QueryBuilder 异步查询流量记录
+     * 
+     * <p>此方法使用 TrafficRecordQueryBuilder 构建的 SQL 查询流量记录。</p>
+     * 
+     * @param queryBuilder 查询构建器
+     * @return CompletableFuture<List<TrafficRecord>> 异步查询结果
+     */
+    public CompletableFuture<List<TrafficRecord>> queryRecordsWithFilter(
+            TrafficRecordQueryBuilder queryBuilder) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return queryRecordsWithFilterSync(queryBuilder);
+            } catch (SQLException e) {
+                throw new RuntimeException("查询流量记录失败: " + e.getMessage(), e);
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 同步查询流量记录（使用 QueryBuilder）
+     * 
+     * @param queryBuilder 查询构建器
+     * @return 流量记录列表
+     * @throws SQLException 如果查询失败
+     */
+    private List<TrafficRecord> queryRecordsWithFilterSync(
+            TrafficRecordQueryBuilder queryBuilder) throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("数据库连接未初始化或已关闭");
+        }
+        
+        TrafficRecordQueryBuilder.QueryResult queryResult = queryBuilder.build();
+        String sql = queryResult.getSql();
+        List<Object> parameters = queryResult.getParameters();
+        
+        List<TrafficRecord> records = new ArrayList<>();
+        
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            // 设置参数
+            for (int i = 0; i < parameters.size(); i++) {
+                Object param = parameters.get(i);
+                int paramIndex = i + 1;
+                
+                if (param instanceof String) {
+                    pstmt.setString(paramIndex, (String) param);
+                } else if (param instanceof Integer) {
+                    pstmt.setInt(paramIndex, (Integer) param);
+                } else if (param instanceof Double) {
+                    pstmt.setDouble(paramIndex, (Double) param);
+                } else if (param instanceof Long) {
+                    pstmt.setLong(paramIndex, (Long) param);
+                } else {
+                    pstmt.setObject(paramIndex, param);
+                }
+            }
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    TrafficRecord record = new TrafficRecordWithIface(
+                        rs.getLong("record_id"),
+                        rs.getInt("session_id"),
+                        rs.getDouble("down_speed"),
+                        rs.getDouble("up_speed"),
+                        rs.getString("source_ip"),
+                        rs.getString("dest_ip"),
+                        rs.getString("process_name"),
+                        rs.getString("protocol"),
+                        rs.getTimestamp("record_time"),
+                        rs.getString("iface_name")
+                    );
+                    records.add(record);
+                }
+            }
+        }
+        
+        return records;
+    }
+    
+    /**
+     * 异步获取所有不重复的进程名称列表
+     * 
+     * <p>用于填充应用过滤下拉列表。</p>
+     * 
+     * @return CompletableFuture<List<String>> 异步返回进程名称列表（不包含 null 和空字符串）
+     */
+    public CompletableFuture<List<String>> getDistinctProcessNames() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return getDistinctProcessNamesSync();
+            } catch (SQLException e) {
+                throw new RuntimeException("查询进程名称列表失败: " + e.getMessage(), e);
+            }
+        }, executorService);
+    }
+    
+    /**
+     * 同步获取所有不重复的进程名称列表（内部方法）
+     * 
+     * @return 进程名称列表（不包含 null 和空字符串），按字母顺序排序
+     * @throws SQLException 如果查询失败
+     */
+    private List<String> getDistinctProcessNamesSync() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            throw new SQLException("数据库连接未初始化或已关闭");
+        }
+        
+        String querySQL = """
+            SELECT DISTINCT process_name
+            FROM %s
+            WHERE process_name IS NOT NULL AND process_name != ''
+            ORDER BY process_name ASC
+            """.formatted(TABLE_TRAFFIC_RECORDS);
+        
+        List<String> processNames = new ArrayList<>();
+        
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(querySQL)) {
+            
+            while (rs.next()) {
+                String processName = rs.getString("process_name");
+                if (processName != null && !processName.trim().isEmpty()) {
+                    processNames.add(processName);
+                }
+            }
+        }
+        
+        return processNames;
     }
     
     /**
@@ -1349,8 +1504,8 @@ public class DatabaseService {
                 // 创建临时会话
                 int sessionId = startNewSessionSync(ifaceName);
                 
-                // 保存明细记录
-                saveDetailRecordSync(sessionId, downSpeed, upSpeed, sourceIp, destIp, processName);
+                // 保存明细记录（不包含协议，使用默认值 null）
+                saveDetailRecordSync(sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, null);
                 
                 // 立即结束会话
                 endSessionSync(sessionId);
@@ -1489,10 +1644,11 @@ public class DatabaseService {
         private final String sourceIp;
         private final String destIp;
         private final String processName;
+        private final String protocol;
         private final Timestamp recordTime;
         
         public TrafficRecord(long recordId, int sessionId, double downSpeed, double upSpeed,
-                           String sourceIp, String destIp, String processName, Timestamp recordTime) {
+                           String sourceIp, String destIp, String processName, String protocol, Timestamp recordTime) {
             this.recordId = recordId;
             this.sessionId = sessionId;
             this.downSpeed = downSpeed;
@@ -1500,7 +1656,14 @@ public class DatabaseService {
             this.sourceIp = sourceIp;
             this.destIp = destIp;
             this.processName = processName;
+            this.protocol = protocol;
             this.recordTime = recordTime;
+        }
+        
+        // 向后兼容构造函数（不包含协议）
+        public TrafficRecord(long recordId, int sessionId, double downSpeed, double upSpeed,
+                           String sourceIp, String destIp, String processName, Timestamp recordTime) {
+            this(recordId, sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, null, recordTime);
         }
         
         // Getter 方法
@@ -1511,6 +1674,7 @@ public class DatabaseService {
         public String getSourceIp() { return sourceIp; }
         public String getDestIp() { return destIp; }
         public String getProcessName() { return processName; }
+        public String getProtocol() { return protocol; }
         public Timestamp getRecordTime() { return recordTime; }
         
         // 向后兼容方法
@@ -1551,9 +1715,9 @@ public class DatabaseService {
         private final String ifaceName;
         
         public TrafficRecordWithIface(long recordId, int sessionId, double downSpeed, double upSpeed,
-                                     String sourceIp, String destIp, String processName, 
+                                     String sourceIp, String destIp, String processName, String protocol,
                                      Timestamp recordTime, String ifaceName) {
-            super(recordId, sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, recordTime);
+            super(recordId, sessionId, downSpeed, upSpeed, sourceIp, destIp, processName, protocol, recordTime);
             this.ifaceName = ifaceName;
         }
         

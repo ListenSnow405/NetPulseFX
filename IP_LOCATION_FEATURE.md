@@ -35,11 +35,11 @@
 - `isCached(String ip)`: 检查 IP 是否已缓存
 
 **API 说明**:
-- 使用 ip-api.com 的免费 API
-- API 地址: `http://ip-api.com/json/{ip}` (免费版仅支持 HTTP，不支持 HTTPS)
-- 免费版本限制: 每分钟 45 次请求
+- 使用 Vore-API 的 IP 查询服务
+- API 地址: `https://api.vore.top/api/IPdata?ip={IP}`
 - 响应格式: JSON
 - 请求超时: 10 秒
+- 支持失败重试机制（最多重试2次）
 
 **缓存机制**:
 - 使用 `ConcurrentHashMap` 实现线程安全的本地缓存
@@ -48,9 +48,9 @@
 - 缓存生命周期: 程序运行期间（程序重启后缓存清空）
 
 **异常处理**:
-- 网络连接异常: 返回"未知位置"，不影响主流程
+- 网络连接异常: 自动重试（最多2次），失败后返回"未知位置"，不影响主流程
 - API 频率限制: 返回"未知位置"，不影响主流程
-- 请求超时: 返回"未知位置"，不影响主流程
+- 请求超时: 自动重试（最多2次），失败后返回"未知位置"，不影响主流程
 - 无效 IP 地址: 返回"未知位置"，并缓存失败结果避免重复查询
 
 ### 3. UI 集成（HistoryController）
@@ -113,7 +113,8 @@ service.queryLocationAsync("8.8.8.8")
 ### 2. 性能优化
 - 本地缓存避免重复查询同一 IP
 - 异步查询不阻塞 UI 线程
-- 请求超时设置（5 秒）避免长时间等待
+- 请求超时设置（10 秒）避免长时间等待
+- 支持失败重试机制，提高查询成功率
 
 ### 3. 健壮性
 - 完善的异常处理机制
@@ -162,9 +163,9 @@ PacketListener listener = new PacketListener() {
 3. 使用 Tooltip 显示详细信息
 
 ### 3. 使用其他 IP 查询 API
-如果需要使用其他 API（如 ipapi.co、ipinfo.io 等），只需修改 `IPLocationService` 中的：
-- `API_BASE_URL` 常量
-- `parseJsonResponse()` 方法中的 JSON 解析逻辑
+如果需要使用其他 API（如 ip-api.com、ipapi.co、ipinfo.io 等），只需修改 `IPLocationService` 中的：
+- `API_BASE_URL` 常量（当前为 `https://api.vore.top/api/IPdata`）
+- `parseJsonResponse()` 方法中的 JSON 解析逻辑（当前使用正则表达式解析 Vore-API 的响应格式）
 
 ### 4. 添加 JSON 解析库
 当前使用正则表达式解析 JSON，对于复杂场景建议使用专门的 JSON 库：
@@ -187,15 +188,15 @@ String country = jsonNode.get("country").asText();
 
 ## 注意事项
 
-1. **API 频率限制**: ip-api.com 免费版本限制每分钟 45 次请求，超过限制会返回错误。建议：
-   - 使用缓存机制减少 API 调用
-   - 对于大量 IP 查询，考虑使用付费 API 或自建服务
+1. **API 服务**: 当前使用 Vore-API 提供 IP 查询服务，请遵守其使用条款和频率限制。
 
 2. **网络依赖**: 功能需要网络连接才能工作。如果网络不可用，所有查询将返回"未知位置"。
 
 3. **隐私考虑**: IP 归属地查询会向第三方 API 发送 IP 地址，请注意隐私保护。
 
 4. **缓存管理**: 当前缓存在程序运行期间一直保留。如果需要定期清理缓存，可以添加定时任务或 LRU 缓存机制。
+
+5. **重试机制**: 服务支持自动重试（最多2次），提高查询成功率。
 
 ## 测试建议
 

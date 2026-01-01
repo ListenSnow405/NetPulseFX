@@ -53,7 +53,7 @@ export AI_API_ENDPOINT=http://localhost:11434/api/generate
 export AI_MODEL=llama2
 ```
 
-**注意：** 如果未设置环境变量，程序默认使用 Ollama 本地配置。
+**注意：** 如果未设置环境变量，程序默认使用 DeepSeek 配置。
 
 ## 使用 Ollama（本地部署）
 
@@ -83,7 +83,7 @@ export AI_MODEL=llama2
 
 ## 测试配置
 
-运行程序后，点击"AI 分析流量"按钮，如果配置正确，系统会：
+运行程序后，在历史数据查看窗口中可以触发 AI 分析，如果配置正确，系统会：
 1. 从数据库加载历史流量数据
 2. 调用 AI API 进行分析
 3. 在"AI 诊断报告"区域显示分析结果
